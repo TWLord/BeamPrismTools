@@ -119,8 +119,8 @@ int main(int argc, char const *argv[]) {
   // the range to zero
 
   // Out of fit range sides to care about
-  p.OORSide = FluxLinearSolver::Params::kLeft; // Try and fit low energy side
-  // p.OORSide = Params::kBoth; // Try and fit both low and high energy side
+  // p.OORSide = FluxLinearSolver::Params::kLeft; // Try and fit low energy side
+  p.OORSide = FluxLinearSolver::Params::kBoth; // Try and fit both low and high energy side
   // p.OORSide = Params::kRight; // Try and fit high energy side
 
   // Rate of gaussian decay for p.OORMode == Params::kGaussianDecay
@@ -129,11 +129,11 @@ int main(int argc, char const *argv[]) {
   // Chi2 factor out of fit range
   p.OORFactor = OutOfRangeChi2Factor;
   p.FitBetweenFoundPeaks = false;
-  p.FitBetween = {0.5,4};
+  p.FitBetween = {0.5,10.0};
   p.MergeENuBins = NEnuBinMerge;
   p.MergeOAPBins = 0;
   // Use 0.5 m flux windows between -0.25 m and 32.5 m (65)
-  p.OffAxisRangesDescriptor = "0_32:0.5";
+  p.OffAxisRangesDescriptor = "-1.45_37.55:0.1";
 
   fls.Initialize(p, {NDFile, NDHist}, {FDFile, FDHist}, true);
 

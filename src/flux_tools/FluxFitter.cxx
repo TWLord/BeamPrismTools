@@ -138,6 +138,7 @@ bool FluxFitter::Fit() {
 
   fMinimizer->SetMaxFunctionCalls(fFitterOpts.MaxLikelihoodCalls);
   fMinimizer->SetTolerance(fFitterOpts.MINUITTolerance);
+  fMinimizer->SetPrintLevel(3);
 
   for (size_t flux_it = 0; flux_it < NFluxes; flux_it++) {
     std::stringstream ss("");

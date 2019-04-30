@@ -375,7 +375,7 @@ public:
     p.FitBetweenFoundPeaks = true;
     p.MergeENuBins = 0;
     p.MergeOAPBins = 0;
-    p.OffAxisRangesDescriptor = "0_32:0.5";
+    p.OffAxisRangesDescriptor = "-1.45_37.55:0.1";
     p.ExpDecayRate = 3;
 
     return p;
@@ -736,17 +736,34 @@ public:
     // std::cout << "[INFO]: Solving with " << NBins << " energy bins."
     // << std::endl;
 
-    if (use_reg) {
+/*    if (use_reg) {
       for (size_t row_it = 0; row_it < (NFluxes - 1); ++row_it) {
         FluxMatrix_Solve(row_it + NBins, row_it) = reg_param;
         FluxMatrix_Solve(row_it + NBins, row_it + 1) = -reg_param;
       }
       FluxMatrix_Solve(NEqs - 1, NFluxes - 1) = reg_param;
     }
+*/
+
+    if (use_reg) {
+      size_t NExtraFluxes = 1;
+      for (size_t row_it = 0; row_it < (NFluxes - (1+NExtraFluxes)); ++row_it) {
+        FluxMatrix_Solve(row_it + NBins, row_it) = reg_param;
+        FluxMatrix_Solve(row_it + NBins, row_it + 1) = -reg_param;
+      }
+      for (size_t row_it = (NFluxes - (1+NExtraFluxes)); row_it < (NFluxes - 1); ++row_it) {
+        FluxMatrix_Solve(row_it + NBins, row_it) = reg_param;
+      }
+      FluxMatrix_Solve(NEqs - 1, NFluxes - 1) = reg_param;
+    }
+
 
     switch (fParams.algo_id) {
     case Params::kSVD: {
       if (use_reg) {
+ 	//last_solution = FluxMatrix_Solve.topRows(NEqs-1)
+        //                    .bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)
+        //                    .solve(Target.topRows(NEqs-1));
         last_solution =
             FluxMatrix_Solve.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)
                 .solve(Target);

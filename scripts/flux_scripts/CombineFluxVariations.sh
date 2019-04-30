@@ -1,18 +1,24 @@
 #!/bin/bash
 
-IDIR="old_uncert_binning_mrad"
+#IDIR="old_uncert_binning_mrad"
+#IDIR="old_uncert_binning"
+#IDIR="fine_binning"
+IDIR="fine_binning_meters"
 
-for DET in "ND"; do
+#NPPFXU was set to 100
+
+#for DET in "ND"; do
+for DET in "ND" "FD"; do
 
 	for i in nu nubar; do
 
 		dp_CombineBuiltFluxes  \
 			-i "/pnfs/dune/persistent/users/picker24/nominal_5E8POT_wppfx/DUNEPrismFluxes/${DET}_${i}/${IDIR}/flux/Fluxes.*.root" \
-		  --NPPFXU 100 \
-			-o ${DET}_${i}_OptimizedEngineeredNov2017Review_${IDIR}_wppfx.root
+		  --NPPFXU 0 \
+			-o ${DET}_${i}_OptimizedEngineeredNov2017Review_${IDIR}_wppfx.root #remove _wppfx appendix if not using ppfx universes
 
 	done
-
+exit
 	#With focussing
 	for i in nu nubar; do
 	  for j in p1 m1; do
