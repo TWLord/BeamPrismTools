@@ -4,20 +4,25 @@
 
 std::string OutputFile = "FluxLinearSolver.root";
 
-std::string NDFile, NDHist, FDFile, FDHist;
+std::string NDFile, NDHist, FDFile, FDHist, BCTree, BCBranches;
+
+std::string OARange;
 
 int NEnuBinMerge = 0;
 
 int method = 1;
 
 double OutOfRangeChi2Factor = 0.1;
-double RegFactor = 1E-7;
+double BCRegFactor = 1E-2;
+double FitRangeLow = 0.5, FitRangeHigh = 10.0;
 
 void SayUsage(char const *argv[]) {
   std::cout << "Runlike: " << argv[0]
             << " -N <NDFluxFile,NDFluxHistName> -F <FDFluxFile,FDFluxHistName> "
                "[-o Output.root -M <1:SVD, 2:QR, 3:Normal, 4:Inverse> -MX "
-               "<NEnuBinMerge> -OR OutOfRangeChi2Factor -RF RegFactor]"
+               "<NEnuBinMerge> -OR OutOfRangeChi2Factor -RF BeamConfigsRegFactor "
+	       "-FR <FitRangeLow, FitRangeHigh> "
+	       "-OA <OffAxisLow_OffAxisHigh:BinWidth,....,OffAxisLow_OffAxisHigh:BinWidth> ]"
             << std::endl;
 }
 
@@ -61,6 +66,17 @@ void handleOpts(int argc, char const *argv[]) {
       }
       FDFile = params[0];
       FDHist = params[1];
+    } else if (std::string(argv[opt]) == "-B") {
+      std::vector<std::string> params =
+          ParseToVect<std::string>(argv[++opt], ",");
+      if (params.size() != 2) {
+        std::cout << "[ERROR]: Recieved " << params.size()
+                  << " entrys for -i, expected 2." << std::endl;
+        exit(1);
+      }
+      BCTree = params[0];
+      BCBranches = params[1];
+//      BCTree = "ConfigTree";
     } else if (std::string(argv[opt]) == "-M") {
       method = str2T<int>(argv[++opt]);
       if ((method < 1) || (method > 4)) {
@@ -69,12 +85,24 @@ void handleOpts(int argc, char const *argv[]) {
             << std::endl;
         method = 2;
       }
+    } else if (std::string(argv[opt]) == "-FR") {
+      std::vector<std::string> params =
+          ParseToVect<std::string>(argv[++opt], ",");
+      if (params.size() != 2) {
+        std::cout << "[ERROR]: Recieved " << params.size()
+                  << " entrys for -i, expected 2." << std::endl;
+        exit(1);
+      }
+      FitRangeLow = str2T<double>(params[0]);
+      FitRangeHigh = str2T<double>(params[1]);
     } else if (std::string(argv[opt]) == "-MX") {
       NEnuBinMerge = str2T<int>(argv[++opt]);
+    } else if (std::string(argv[opt]) == "-OA") {
+      OARange = std::string(argv[++opt]);
     } else if (std::string(argv[opt]) == "-OR") {
       OutOfRangeChi2Factor = str2T<double>(argv[++opt]);
     } else if (std::string(argv[opt]) == "-RF") {
-      RegFactor = str2T<double>(argv[++opt]);
+      BCRegFactor = str2T<double>(argv[++opt]);
     } else if ((std::string(argv[opt]) == "-?") ||
                (std::string(argv[opt]) == "--help")) {
       SayUsage(argv);
@@ -129,13 +157,16 @@ int main(int argc, char const *argv[]) {
   // Chi2 factor out of fit range
   p.OORFactor = OutOfRangeChi2Factor;
   p.FitBetweenFoundPeaks = false;
-  p.FitBetween = {0.5,10.0};
+  // p.FitBetween = {0.5,10.0};
+   p.FitBetween = {FitRangeLow,FitRangeHigh};
   p.MergeENuBins = NEnuBinMerge;
   p.MergeOAPBins = 0;
   // Use 0.5 m flux windows between -0.25 m and 32.5 m (65)
-  p.OffAxisRangesDescriptor = "-1.45_37.55:0.1";
+  //p.OffAxisRangesDescriptor = "-1.45_37.55:0.1";
+  p.OffAxisRangesDescriptor = OARange;
+  //p.OffAxisRangesDescriptor = "-1.45_32.45:0.1,37.45_37.55:0.1";
 
-  fls.Initialize(p, {NDFile, NDHist}, {FDFile, FDHist}, true);
+  fls.Initialize(p, {NDFile, NDHist}, {FDFile, FDHist}, {BCTree, BCBranches}, true);
 
   // std::array<double, 6> OscParameters{0.297,   0.0214,   0.534,
   //                                     7.37E-5, 2.539E-3, 0};
@@ -157,7 +188,7 @@ int main(int argc, char const *argv[]) {
     double reg_exp = start + double(l_it) * step;
     // Passed parameter is regularization factor, should scan for the best one,
     double soln_norm, res_norm;
-    fls.Solve(pow(10, reg_exp), res_norm, soln_norm);
+    fls.Solve(pow(10, reg_exp), BCRegFactor, res_norm, soln_norm);
 
     eta_hat.push_back(log(soln_norm));
     rho_hat.push_back(log(res_norm));
@@ -185,7 +216,7 @@ int main(int argc, char const *argv[]) {
     }
   }
 
-  fls.Solve(best_reg);
+  fls.Solve(best_reg, BCRegFactor);
 
   TFile *f = CheckOpenFile(OutputFile, "RECREATE");
   fls.Write(f);

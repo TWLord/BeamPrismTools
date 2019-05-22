@@ -8,6 +8,8 @@
 #include "TFile.h"
 #include "TH1.h"
 #include "TH2.h"
+#include "TTreeReader.h"
+#include "TTreeReaderValue.h"
 
 #include <iostream>
 #include <memory>
@@ -390,6 +392,9 @@ public:
   std::unique_ptr<TH1> FDFlux_unosc;
   std::unique_ptr<TH1> FDFlux_osc;
 
+  std::unique_ptr<TTree> BCTree;
+
+  Int_t NumBeamConfigs;
   size_t NCoefficients;
   size_t low_offset, FitIdxLow, FitIdxHigh;
 
@@ -397,6 +402,7 @@ public:
   Initialize(Params const &p,
              std::pair<std::string, std::string> NDFluxDescriptor = {"", ""},
              std::pair<std::string, std::string> FDFluxDescriptor = {"", ""},
+             std::pair<std::string, std::string> NDBeamConfDescriptor = {"", ""},
              bool FDIsOsc = false) {
 
     FluxMatrix_Full = Eigen::MatrixXd::Zero(0, 0);
@@ -430,6 +436,18 @@ public:
         BuildTargetFlux();
       }
     }
+    TFile *BCfile = CheckOpenFile(NDFluxDescriptor.first);
+    TTree *BCtree = (TTree*)BCfile->Get((NDBeamConfDescriptor.first).c_str());
+    if (!BCtree) {
+      std::cout << "Couldn't find config tree: " << (NDBeamConfDescriptor.first).c_str() << std::endl;
+      NumBeamConfigs=0;
+      std::cout << "Number of additional Beam Configs used = " << NumBeamConfigs << std::endl;
+      return;
+    }
+    BCtree = (TTree*)BCfile->Get((NDBeamConfDescriptor.first).c_str());
+    BCtree->SetBranchAddress("NumBeamConfigs",&NumBeamConfigs); 
+    BCtree->GetEntry(0);
+    std::cout << "Number of additional Beam Configs used = " << NumBeamConfigs << std::endl;
   }
 
   void SetNDFluxes(TH2 *const NDFluxes, bool ApplyXRanges = true) {
@@ -725,7 +743,7 @@ public:
     }
   }
 
-  Eigen::VectorXd const &Solve(double reg_param, double &res_norm,
+  Eigen::VectorXd const &Solve(double reg_param, double BC_param, double &res_norm,
                                double &soln_norm) {
 
     bool use_reg = reg_param > 0;
@@ -733,30 +751,43 @@ public:
     size_t NEqs = FluxMatrix_Solve.rows();
     size_t NBins = NEqs - NFluxes;
 
-    // std::cout << "[INFO]: Solving with " << NBins << " energy bins."
+    std::cout << "[INFO]: Solving with " << NBins << " energy bins." << std::endl;
+    std::cout << "[INFO]: Solving with " << NFluxes << " fluxes." << std::endl;
+    std::cout << "[INFO]: Solving with " << NumBeamConfigs << " extra fluxes." << std::endl;
     // << std::endl;
 
-/*    if (use_reg) {
-      for (size_t row_it = 0; row_it < (NFluxes - 1); ++row_it) {
-        FluxMatrix_Solve(row_it + NBins, row_it) = reg_param;
-        FluxMatrix_Solve(row_it + NBins, row_it + 1) = -reg_param;
-      }
-      FluxMatrix_Solve(NEqs - 1, NFluxes - 1) = reg_param;
-    }
-*/
-
     if (use_reg) {
-      size_t NExtraFluxes = 1;
-      for (size_t row_it = 0; row_it < (NFluxes - (1+NExtraFluxes)); ++row_it) {
-        FluxMatrix_Solve(row_it + NBins, row_it) = reg_param;
-        FluxMatrix_Solve(row_it + NBins, row_it + 1) = -reg_param;
+      size_t NExtraFluxes = NumBeamConfigs;
+      // std::cout << "NumBeamConfigs used : " << NumBeamConfigs << std::endl;
+      if (!NExtraFluxes) {
+	std::cout << NExtraFluxes << " extra fluxes, using normal reg" << std::endl;
+        for (size_t row_it = 0; row_it < (NFluxes - 1); ++row_it) {
+	//  std::cout << "printed.. " << row_it << std::endl;
+          FluxMatrix_Solve(row_it + NBins, row_it) = reg_param;
+          FluxMatrix_Solve(row_it + NBins, row_it + 1) = -reg_param;
+        }
+        FluxMatrix_Solve(NEqs - 1, NFluxes - 1) = reg_param;
       }
-      for (size_t row_it = (NFluxes - (1+NExtraFluxes)); row_it < (NFluxes - 1); ++row_it) {
-        FluxMatrix_Solve(row_it + NBins, row_it) = reg_param;
+      else if (NExtraFluxes == NFluxes || NExtraFluxes >= NFluxes) {
+	std::cout << "Assuming all " << NFluxes << " NFluxes are additional beam configs" << std::endl;
+        for (size_t row_it = 0; row_it < NFluxes; ++row_it) {
+          FluxMatrix_Solve(row_it + NBins, row_it) = reg_param*BC_param;
+        }
       }
-      FluxMatrix_Solve(NEqs - 1, NFluxes - 1) = reg_param;
+      else {
+	std::cout << NExtraFluxes << " extra fluxes, using uncorrelated reg for extra fluxes" << std::endl;
+        for (size_t row_it = 0; row_it < (NFluxes - (1+NExtraFluxes)); ++row_it) {
+          FluxMatrix_Solve(row_it + NBins, row_it) = reg_param;
+          FluxMatrix_Solve(row_it + NBins, row_it + 1) = -reg_param;
+        }
+	FluxMatrix_Solve((NFluxes - (1+NExtraFluxes)) + NBins, (NFluxes - (1+NExtraFluxes))) = reg_param;
+        for (size_t row_it = (NFluxes - NExtraFluxes); row_it < NFluxes; ++row_it) {
+          FluxMatrix_Solve(row_it + NBins, row_it) = reg_param*BC_param;
+        }
+      }
     }
-
+//    Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
+//    std::cout << FluxMatrix_Solve.format(CleanFmt) << std::endl;
 
     switch (fParams.algo_id) {
     case Params::kSVD: {
@@ -836,9 +867,11 @@ public:
 
     return last_solution;
   }
-  Eigen::VectorXd Solve(double reg_param = 0) {
+  Eigen::VectorXd Solve(double reg_param = 0, double BC_param = 1) {
     double dum1, dum2;
-    return Solve(reg_param, dum1, dum2);
+    std::cout << "reg_param = " << reg_param << std::endl; 
+    std::cout << "BC_param = " << BC_param << std::endl; 
+    return Solve(reg_param, BC_param, dum1, dum2);
   }
 
   void Write(TDirectory *td) {
@@ -873,6 +906,10 @@ public:
         new TH1D("Coeffs", "", last_solution.rows(), 0, last_solution.rows());
     FillHistFromEigenVector(Coeffs, last_solution);
 
+    if (BCTree) { 
+      static_cast<TTree *>(BCTree->Clone("ConfigTree"))->SetDirectory(td);
+    }
+
     if (FDFlux_unosc) {
       static_cast<TH1 *>(FDFlux_unosc->Clone("FDFlux_unosc"))->SetDirectory(td);
     }
@@ -882,6 +919,7 @@ public:
     FDFlux_targ_OORScale->SetDirectory(td);
     FDFlux_bf->SetDirectory(td);
     Coeffs->SetDirectory(td);
+//    BCTree->SetDirectory(td);
   }
 };
 
