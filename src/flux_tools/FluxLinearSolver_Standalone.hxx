@@ -4,10 +4,12 @@
 #include "BargerPropagator.h"
 
 #include "Eigen/Dense"
+#include "Eigen/StdVector"
 
 #include "TFile.h"
 #include "TH1.h"
 #include "TH2.h"
+#include "TH3.h"
 #include "TTreeReader.h"
 #include "TTreeReaderValue.h"
 
@@ -139,6 +141,31 @@ BuildRangesList(std::string const &str) {
   return RangesList;
 }
 
+inline std::vector<int>
+BuildHConfsList(std::string const &str) {
+  std::vector<int> HClist = ParseToVect<int>(str, ",");
+
+  if (! HClist.size() ) {
+        std::cout
+            << "[ERROR]: HConfdescriptor: \"" << str
+            << "\" contained bad descriptor."
+            << " Expected integers between 1 and 5 separated by commas."
+            << std::endl;
+        exit(0);
+      }
+  else for ( int l : HClist ) {
+    if ( l > 5 || l < 0 ) {
+        std::cout
+            << "[ERROR]: HConfdescriptor: \"" << str
+            << "\" contained bad descriptor: \"" << l
+            << "\", expected integers between 1 and 5 separated by commas."
+            << std::endl;
+        exit(0);
+      }
+  }
+  return HClist;
+}
+
 // ************ End helper methods
 
 // *************** Helper methods from ROOTUtility to make this standalone
@@ -244,20 +271,20 @@ MergeSplitTH2(std::unique_ptr<TH2> &t2, bool AlongY,
 
   std::vector<std::unique_ptr<TH1>> split;
 
-  for (std::pair<double, double> const &v : Vals) {
-    std::pair<Int_t, Int_t> binr =
-        GetProjectionBinRange(v, (AlongY ? t2->GetYaxis() : t2->GetXaxis()));
+    for (std::pair<double, double> const &v : Vals) {
+      std::pair<Int_t, Int_t> binr =
+          GetProjectionBinRange(v, (AlongY ? t2->GetYaxis() : t2->GetXaxis()));
 
-    split.emplace_back(
-        AlongY ? t2->ProjectionX(
-                     (to_str(v.first) + "_to_" + to_str(v.second)).c_str(),
-                     binr.first, binr.second)
-               : t2->ProjectionY(
-                     (to_str(v.first) + "_to_" + to_str(v.second)).c_str(),
-                     binr.first, binr.second));
-    split.back()->Scale(1.0 / double(binr.second - binr.first + 1));
-    split.back()->SetDirectory(NULL);
-  }
+      split.emplace_back(
+          AlongY ? t2->ProjectionX(
+                       (to_str(v.first) + "_to_" + to_str(v.second)).c_str(),
+                       binr.first, binr.second)
+                 : t2->ProjectionY(
+                       (to_str(v.first) + "_to_" + to_str(v.second)).c_str(),
+                       binr.first, binr.second));
+      split.back()->Scale(1.0 / double(binr.second - binr.first + 1));
+      split.back()->SetDirectory(NULL);
+    }
 
   return split;
 }
@@ -364,6 +391,10 @@ public:
     /// Use a subset of the full input ranges described by this descriptor
     ///
     std::string OffAxisRangesDescriptor;
+
+    std::pair<double, double> CurrentRange;
+
+    std::string HConfigs;
   };
   Params fParams;
 
@@ -379,11 +410,15 @@ public:
     p.MergeOAPBins = 0;
     p.OffAxisRangesDescriptor = "-1.45_37.55:0.1";
     p.ExpDecayRate = 3;
+    p.CurrentRange = {0, 350};
+    p.HConfigs = "1,2,3,4,5";
 
     return p;
   }
 
   Eigen::MatrixXd FluxMatrix_Full;
+  Eigen::MatrixXd FluxMatrix_zSlice;
+  Eigen::MatrixXd FluxMatrix_All; 
   Eigen::MatrixXd FluxMatrix_Solve;
   Eigen::VectorXd Target;
 
@@ -396,6 +431,8 @@ public:
 
   Int_t NumBeamConfigs;
   size_t NCoefficients;
+  std::vector<size_t> nZbins;
+  size_t FluxesPerZ;
   size_t low_offset, FitIdxLow, FitIdxHigh;
 
   void
@@ -405,25 +442,47 @@ public:
              std::pair<std::string, std::string> NDBeamConfDescriptor = {"", ""},
              bool FDIsOsc = false) {
 
+    std::pair<std::string, std::vector<std::string>> vectNDFluxDescriptor;
+    vectNDFluxDescriptor.first = NDFluxDescriptor.first;
+    vectNDFluxDescriptor.second.emplace_back(NDFluxDescriptor.second);
+
+    Initialize(p, vectNDFluxDescriptor, FDFluxDescriptor,
+		NDBeamConfDescriptor, FDIsOsc);
+
+  }
+
+  void
+  Initialize(Params const &p,
+             std::pair<std::string, std::vector<std::string>> NDFluxDescriptor = {"", {""} },
+             std::pair<std::string, std::string> FDFluxDescriptor = {"", ""},
+             std::pair<std::string, std::string> NDBeamConfDescriptor = {"", ""},
+             bool FDIsOsc = false) {
+
     FluxMatrix_Full = Eigen::MatrixXd::Zero(0, 0);
+    FluxMatrix_All = Eigen::MatrixXd::Zero(0, 0);
 
     fParams = p;
 
-    if (NDFluxDescriptor.first.size() && NDFluxDescriptor.second.size()) {
+    std::vector<std::unique_ptr<TH3>> Flux3DList;
+    for (size_t hist_it=0; hist_it < NDFluxDescriptor.second.size(); hist_it++) {
+      if (NDFluxDescriptor.first.size() && NDFluxDescriptor.second.size()) {
 
-      std::unique_ptr<TH2> Flux2D =
-          GetHistogram<TH2>(NDFluxDescriptor.first, NDFluxDescriptor.second);
+        std::unique_ptr<TH3> Flux3D =
+            GetHistogram<TH3>(NDFluxDescriptor.first, NDFluxDescriptor.second[hist_it]);
 
-      if (!Flux2D) {
-        std::cout << "[ERROR]: Found no input flux with name: \""
-                  << NDFluxDescriptor.first << "\" in file: \""
-                  << NDFluxDescriptor.second << "\"." << std::endl;
-        throw;
+        if (!Flux3D) {
+          std::cout << "[ERROR]: Found no input flux with name: \"" 
+                    << NDFluxDescriptor.first << "\" in file: \"" 
+                    << NDFluxDescriptor.second[hist_it] << "\"." << std::endl;
+          throw;
+        }
+
+	Flux3DList.emplace_back(std::move(Flux3D));
       }
-
-      SetNDFluxes(Flux2D.get());
-
-    } // end ND setup
+    } 
+    SetNDFluxes(std::move(Flux3DList));
+    // end ND setup
+//////////////////////////////// editing above ^
 
     if (FDFluxDescriptor.first.size() && FDFluxDescriptor.second.size()) {
 
@@ -450,61 +509,126 @@ public:
     std::cout << "Number of additional Beam Configs used = " << NumBeamConfigs << std::endl;
   }
 
-  void SetNDFluxes(TH2 *const NDFluxes, bool ApplyXRanges = true) {
+  void SetNDFluxes(std::vector<std::unique_ptr<TH3>> const &NDFluxes, bool ApplyXRanges = true) {
 
     std::vector<std::pair<double, double>> XRanges;
     if (ApplyXRanges && fParams.OffAxisRangesDescriptor.size()) {
       XRanges = BuildRangesList(fParams.OffAxisRangesDescriptor);
     }
 
-    std::unique_ptr<TH2> Flux2D(static_cast<TH2 *>(NDFluxes->Clone()));
-    Flux2D->SetDirectory(nullptr);
-
-    if (fParams.MergeENuBins && fParams.MergeOAPBins) {
-      Flux2D->Rebin2D(fParams.MergeENuBins, fParams.MergeOAPBins);
-      Flux2D->Scale(1.0 / double(fParams.MergeENuBins * fParams.MergeOAPBins));
-    } else if (fParams.MergeENuBins) {
-      Flux2D->RebinX(fParams.MergeENuBins);
-      Flux2D->Scale(1.0 / double(fParams.MergeENuBins));
-    } else if (fParams.MergeOAPBins) {
-      Flux2D->RebinY(fParams.MergeOAPBins);
-      Flux2D->Scale(1.0 / double(fParams.MergeOAPBins));
+    std::vector<int> Confs;
+    if (fParams.HConfigs.size()) {
+      Confs = BuildHConfsList(fParams.HConfigs);
     }
 
-    if (XRanges.size()) { // Use a subset of (possibly merged) off-axis slices
-      std::vector<std::unique_ptr<TH1>> FluxSlices =
-          MergeSplitTH2(Flux2D, true, XRanges);
-      if (!FluxSlices.size()) {
-        std::cout << "[ERROR]: Found no input fluxes." << std::endl;
-        exit(1);
-      }
-      // extra rows corresponding to NColumns used for regularization if
-      // enabled
-      FluxMatrix_Full = Eigen::MatrixXd::Zero(
-          FluxSlices.front()->GetXaxis()->GetNbins(), FluxSlices.size());
-      size_t col_it = 0;
-      for (std::unique_ptr<TH1> &f : FluxSlices) {
-        for (Int_t bi_it = 0; bi_it < f->GetXaxis()->GetNbins(); ++bi_it) {
-          FluxMatrix_Full(bi_it, col_it) = f->GetBinContent(bi_it + 1);
+    std::cout << NDFluxes[0]->GetNbinsZ() << std::endl;
+    //std::vector<Eigen::MatrixXd> NDMatrices(NDFluxes.size()*NDFluxes[0]->GetNbinsZ());
+    std::vector<Eigen::MatrixXd> NDMatrices;
+    std::cout << " For initialising matrix vec, NbinsZ : " << (NDFluxes.size()*NDFluxes[0]->GetNbinsZ()) << std::endl;
+    std::cout << " matrix vec size : " << NDMatrices.size() << std::endl;
+
+    for (size_t i = 0; i < NDFluxes.size(); i++ ) {
+      std::unique_ptr<TH3> Flux3D(static_cast<TH3 *>(NDFluxes[i]->Clone()));
+      Flux3D->SetDirectory(nullptr);
+
+      // might want FindFixBin?
+      // lowCurrentBin = Flux3D->GetZaxis()->FindBin( CurrentRange.first );
+      // highCurrentBin = Flux3D->GetZaxis()->FindBin( CurrentRange.second );
+
+      int lowCurrentBin = Flux3D->GetZaxis()->FindFixBin( fParams.CurrentRange.first );
+      int highCurrentBin = Flux3D->GetZaxis()->FindFixBin( fParams.CurrentRange.second );
+      int zBins = ( highCurrentBin + 1 ) - lowCurrentBin;
+      nZbins.emplace_back(zBins);
+      std::cout << " lowCurrentBin : " << lowCurrentBin << std::endl;
+      std::cout << " highCurrentBin : " << highCurrentBin << std::endl; 
+      std::cout << " zBins : " << zBins << std::endl; 
+
+
+      for (int z = lowCurrentBin; z <= highCurrentBin; z++) {
+        Flux3D->GetZaxis()->SetRange(z,z);
+        // std::unique_ptr<TH2> Flux2D = Flux3D->Project3D("yx");
+        TH2 *projectedFlux = (TH2*)Flux3D->Project3D("yx");
+      	std::unique_ptr<TH2> Flux2D(static_cast<TH2 *>(projectedFlux->Clone()));
+      	Flux2D->SetDirectory(nullptr);
+
+        if (fParams.MergeENuBins && fParams.MergeOAPBins) {
+          Flux2D->Rebin2D(fParams.MergeENuBins, fParams.MergeOAPBins);
+          Flux2D->Scale(1.0 / double(fParams.MergeENuBins * fParams.MergeOAPBins));
+        } else if (fParams.MergeENuBins) {
+          Flux2D->RebinX(fParams.MergeENuBins);
+          Flux2D->Scale(1.0 / double(fParams.MergeENuBins));
+        } else if (fParams.MergeOAPBins) {
+          Flux2D->RebinY(fParams.MergeOAPBins);
+          Flux2D->Scale(1.0 / double(fParams.MergeOAPBins));
         }
-        col_it++;
-      }
-    } else { // Use the entire set of fluxes
-      // extra rows corresponding to NColumns used for regularization if
-      // enabled
-      FluxMatrix_Full = Eigen::MatrixXd::Zero(Flux2D->GetXaxis()->GetNbins(),
-                                              Flux2D->GetYaxis()->GetNbins());
-      for (Int_t oabi_it = 0; oabi_it < Flux2D->GetYaxis()->GetNbins();
-           ++oabi_it) {
-        for (Int_t ebi_it = 0; ebi_it < Flux2D->GetXaxis()->GetNbins();
-             ++ebi_it) {
-          FluxMatrix_Full(ebi_it, oabi_it) =
-              Flux2D->GetBinContent(ebi_it + 1, oabi_it + 1);
+
+        if (XRanges.size()) { // Use a subset of (possibly merged) off-axis slices
+          std::vector<std::unique_ptr<TH1>> FluxSlices =
+              MergeSplitTH2(Flux2D, true, XRanges);
+          if (!FluxSlices.size()) {
+            std::cout << "[ERROR]: Found no input fluxes." << std::endl;
+            exit(1);
+          }
+          // extra rows corresponding to NColumns used for regularization if
+          // enabled
+          FluxMatrix_zSlice = Eigen::MatrixXd::Zero(
+              FluxSlices.front()->GetXaxis()->GetNbins(), FluxSlices.size());
+          size_t col_it = 0;
+          for (std::unique_ptr<TH1> &f : FluxSlices) {
+            for (Int_t bi_it = 0; bi_it < f->GetXaxis()->GetNbins(); ++bi_it) {
+              FluxMatrix_zSlice(bi_it, col_it) = f->GetBinContent(bi_it + 1);
+            }
+            col_it++;
+          }
+        } else { // Use the entire set of fluxes
+          // extra rows corresponding to NColumns used for regularization if
+          // enabled
+          FluxMatrix_zSlice = Eigen::MatrixXd::Zero(Flux2D->GetXaxis()->GetNbins(),
+                                                Flux2D->GetYaxis()->GetNbins());
+          for (Int_t oabi_it = 0; oabi_it < Flux2D->GetYaxis()->GetNbins();
+               ++oabi_it) {
+            for (Int_t ebi_it = 0; ebi_it < Flux2D->GetXaxis()->GetNbins();
+                 ++ebi_it) {
+              FluxMatrix_zSlice(ebi_it, oabi_it) =
+                  Flux2D->GetBinContent(ebi_it + 1, oabi_it + 1);
+            }
+          }
         }
+	NDMatrices.emplace_back(FluxMatrix_zSlice);
+//	Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
+//	std::cout << FluxMatrix_zSlice.format(CleanFmt) << std::endl;
+    	FluxesPerZ = FluxMatrix_zSlice.cols();
+    
       }
     }
+    Int_t NDrows = NDMatrices[0].rows();
+    Int_t NDcols = NDMatrices[0].cols();
 
+    std::cout << "NDrows : " << NDrows << std::endl;
+    std::cout << "NDcols : " << NDcols << std::endl;
+
+    std::cout << "NDrows : " << NDMatrices[1].rows() << std::endl;
+    std::cout << "NDcols : " << NDMatrices[1].cols() << std::endl;
+
+    std::cout << "NDMatrices.size : " << NDMatrices.size() << std::endl;
+
+    FluxMatrix_Full = Eigen::MatrixXd(NDrows, NDcols*NDMatrices.size());
+    for (size_t n = 0; n < NDMatrices.size(); n++) {
+//      for (Int_t NDrow_it = 0; NDrow_it < NDrows) { 
+//        for (Int_t NDcol_it = 0; NDcol_it < NDcols) { 
+//	  FluxMatrix_Full( NDrow_it + n*NDrows, NDcol_it )
+//        }
+//      }
+      std::cout << "n*NDrows : " << n*NDrows << std::endl;
+      std::cout << "(n+1)*NDrows : " << (n+1)*NDrows << std::endl;
+      std::cout << "NDcols : " << NDcols << std::endl;
+      // FluxMatrix_Full.block(0 + n*NDrows, 0, NDrows, NDcols) = NDMatrices[n];
+      FluxMatrix_Full.block(0, 0 + n*NDcols, NDrows, NDcols) = NDMatrices[n];
+    }
+    //Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
+    //std::cout << FluxMatrix_Full.format(CleanFmt) << std::endl;
     NCoefficients = FluxMatrix_Full.cols();
+
   }
 
   void OscillateFDFlux(std::array<double, 6> OscParameters = {},
@@ -757,12 +881,18 @@ public:
     // << std::endl;
 
     if (use_reg) {
-      size_t NExtraFluxes = NumBeamConfigs;
-      // std::cout << "NumBeamConfigs used : " << NumBeamConfigs << std::endl;
+      //size_t NExtraFluxes = NumBeamConfigs;
+      size_t NExtraFluxes = (nZbins[0] - 1)*FluxesPerZ;
+      std::cout << "NExtraFluxes : " << NExtraFluxes << std::endl;
+      std::cout << "FluxesPerZ : " << FluxesPerZ << std::endl;
+      for (size_t z=1; z < nZbins.size(); z++) {
+        NExtraFluxes += (nZbins[z]*FluxesPerZ);
+      }
+      std::cout << "NExtraFluxes : " << NExtraFluxes << std::endl;
+
       if (!NExtraFluxes) {
 	std::cout << NExtraFluxes << " extra fluxes, using normal reg" << std::endl;
         for (size_t row_it = 0; row_it < (NFluxes - 1); ++row_it) {
-	//  std::cout << "printed.. " << row_it << std::endl;
           FluxMatrix_Solve(row_it + NBins, row_it) = reg_param;
           FluxMatrix_Solve(row_it + NBins, row_it + 1) = -reg_param;
         }
@@ -792,9 +922,6 @@ public:
     switch (fParams.algo_id) {
     case Params::kSVD: {
       if (use_reg) {
- 	//last_solution = FluxMatrix_Solve.topRows(NEqs-1)
-        //                    .bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)
-        //                    .solve(Target.topRows(NEqs-1));
         last_solution =
             FluxMatrix_Solve.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)
                 .solve(Target);

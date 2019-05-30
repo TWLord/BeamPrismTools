@@ -4,7 +4,9 @@
 
 std::string OutputFile = "FluxLinearSolver.root";
 
-std::string NDFile, NDHist, FDFile, FDHist, BCTree, BCBranches;
+std::string NDFile, FDFile, FDHist, BCTree, BCBranches;
+
+std::vector<std::string> NDHists;
 
 std::string OARange;
 
@@ -15,13 +17,15 @@ int method = 1;
 double OutOfRangeChi2Factor = 0.1;
 double BCRegFactor = 1E-2;
 double FitRangeLow = 0.5, FitRangeHigh = 10.0;
+double CurrentRangeLow = 75, CurrentRangeHigh = 350;
 
 void SayUsage(char const *argv[]) {
   std::cout << "Runlike: " << argv[0]
             << " -N <NDFluxFile,NDFluxHistName> -F <FDFluxFile,FDFluxHistName> "
                "[-o Output.root -M <1:SVD, 2:QR, 3:Normal, 4:Inverse> -MX "
                "<NEnuBinMerge> -OR OutOfRangeChi2Factor -RF BeamConfigsRegFactor "
-	       "-FR <FitRangeLow, FitRangeHigh> "
+	       "-B <ConfTree,ConfBranches> "
+	       "-FR <FitRangeLow, FitRangeHigh> -CR <CurrentRangeLow, CurrentRangeHigh "
 	       "-OA <OffAxisLow_OffAxisHigh:BinWidth,....,OffAxisLow_OffAxisHigh:BinWidth> ]"
             << std::endl;
 }
@@ -49,13 +53,13 @@ void handleOpts(int argc, char const *argv[]) {
     } else if (std::string(argv[opt]) == "-N") {
       std::vector<std::string> params =
           ParseToVect<std::string>(argv[++opt], ",");
-      if (params.size() != 2) {
-        std::cout << "[ERROR]: Recieved " << params.size()
-                  << " entrys for -i, expected 2." << std::endl;
-        exit(1);
-      }
+      // if (params.size() != 2) {
+      //   std::cout << "[ERROR]: Recieved " << params.size()
+      //             << " entrys for -i, expected 2." << std::endl;
+      //   exit(1);
+      // }
       NDFile = params[0];
-      NDHist = params[1];
+      NDHists = ParseToVect<std::string>(params[1], ":");
     } else if (std::string(argv[opt]) == "-F") {
       std::vector<std::string> params =
           ParseToVect<std::string>(argv[++opt], ",");
@@ -95,6 +99,16 @@ void handleOpts(int argc, char const *argv[]) {
       }
       FitRangeLow = str2T<double>(params[0]);
       FitRangeHigh = str2T<double>(params[1]);
+    } else if (std::string(argv[opt]) == "-CR") {
+      std::vector<std::string> params =
+          ParseToVect<std::string>(argv[++opt], ",");
+      if (params.size() != 2) {
+        std::cout << "[ERROR]: Recieved " << params.size()
+                  << " entrys for -i, expected 2." << std::endl;
+        exit(1);
+      }
+      CurrentRangeLow = str2T<double>(params[0]);
+      CurrentRangeHigh = str2T<double>(params[1]);
     } else if (std::string(argv[opt]) == "-MX") {
       NEnuBinMerge = str2T<int>(argv[++opt]);
     } else if (std::string(argv[opt]) == "-OA") {
@@ -166,7 +180,7 @@ int main(int argc, char const *argv[]) {
   p.OffAxisRangesDescriptor = OARange;
   //p.OffAxisRangesDescriptor = "-1.45_32.45:0.1,37.45_37.55:0.1";
 
-  fls.Initialize(p, {NDFile, NDHist}, {FDFile, FDHist}, {BCTree, BCBranches}, true);
+  fls.Initialize(p, {NDFile, NDHists}, {FDFile, FDHist}, {BCTree, BCBranches}, true);
 
   // std::array<double, 6> OscParameters{0.297,   0.0214,   0.534,
   //                                     7.37E-5, 2.539E-3, 0};
@@ -176,7 +190,7 @@ int main(int argc, char const *argv[]) {
   // // Defaults to DUNE baseline;
   // fls.OscillateFDFlux(OscParameters, OscChannel);
 
-  size_t nsteps = 1000;
+  size_t nsteps = 20;
   double start = -10;
   double end = -6;
   TGraph lcurve(nsteps);
