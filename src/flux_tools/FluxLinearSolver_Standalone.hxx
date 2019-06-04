@@ -877,7 +877,8 @@ public:
 
     std::cout << "[INFO]: Solving with " << NBins << " energy bins." << std::endl;
     std::cout << "[INFO]: Solving with " << NFluxes << " fluxes." << std::endl;
-    std::cout << "[INFO]: Solving with " << NumBeamConfigs << " extra fluxes." << std::endl;
+    // std::cout << "[INFO]: Solving with " << NumBeamConfigs << " extra fluxes." << std::endl;
+    std::cout << "[INFO]: Solving with " << (nZbins[0] - 1)*FluxesPerZ << " extra fluxes." << std::endl;
     // << std::endl;
 
     if (use_reg) {
