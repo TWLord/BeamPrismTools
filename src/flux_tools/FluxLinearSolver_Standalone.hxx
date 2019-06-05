@@ -429,7 +429,8 @@ public:
 
   std::unique_ptr<TTree> BCTree;
 
-  Int_t NumBeamConfigs;
+  Int_t NumBeamConfigs = 0;
+  Int_t TotalNumBeamConfigs = 0;
   size_t NCoefficients;
   std::vector<size_t> nZbins;
   size_t FluxesPerZ;
@@ -505,8 +506,11 @@ public:
     }
     BCtree = (TTree*)BCfile->Get((NDBeamConfDescriptor.first).c_str());
     BCtree->SetBranchAddress("NumBeamConfigs",&NumBeamConfigs); 
-    BCtree->GetEntry(0);
-    std::cout << "Number of additional Beam Configs used = " << NumBeamConfigs << std::endl;
+    for (int i = 0; i < BCtree->GetEntries(); i++) {
+	BCtree->GetEntry(i);
+	TotalNumBeamConfigs += NumBeamConfigs;
+    }
+    std::cout << "Number of additional beam configs in file = " << TotalNumBeamConfigs << std::endl;
   }
 
   void SetNDFluxes(std::vector<std::unique_ptr<TH3>> const &NDFluxes, bool ApplyXRanges = true) {

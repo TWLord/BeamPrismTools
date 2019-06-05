@@ -168,6 +168,8 @@ int main(int argc, char const *argv[]) {
   // Rate of gaussian decay for p.OORMode == Params::kGaussianDecay
   p.ExpDecayRate = 3;
 
+  p.CurrentRange = {CurrentRangeLow, CurrentRangeHigh};
+
   // Chi2 factor out of fit range
   p.OORFactor = OutOfRangeChi2Factor;
   p.FitBetweenFoundPeaks = false;
