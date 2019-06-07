@@ -394,6 +394,8 @@ public:
 
     std::pair<double, double> CurrentRange;
 
+    std::pair<double, double> NominalFlux;
+
     std::string HConfigs;
   };
   Params fParams;
@@ -411,6 +413,7 @@ public:
     p.OffAxisRangesDescriptor = "-1.45_37.55:0.1";
     p.ExpDecayRate = 3;
     p.CurrentRange = {0, 350};
+    p.NominalFlux = {4, 293};
     p.HConfigs = "1,2,3,4,5";
 
     return p;
@@ -433,6 +436,7 @@ public:
   Int_t TotalNumBeamConfigs = 0;
   size_t NCoefficients;
   std::vector<size_t> nZbins;
+  Int_t NomRegFluxFirst = 0, NomRegFluxLast = 0;
   size_t FluxesPerZ;
   size_t low_offset, FitIdxLow, FitIdxHigh;
 
@@ -526,10 +530,7 @@ public:
     }
 
     std::cout << NDFluxes[0]->GetNbinsZ() << std::endl;
-    //std::vector<Eigen::MatrixXd> NDMatrices(NDFluxes.size()*NDFluxes[0]->GetNbinsZ());
     std::vector<Eigen::MatrixXd> NDMatrices;
-    std::cout << " For initialising matrix vec, NbinsZ : " << (NDFluxes.size()*NDFluxes[0]->GetNbinsZ()) << std::endl;
-    std::cout << " matrix vec size : " << NDMatrices.size() << std::endl;
 
     for (size_t i = 0; i < NDFluxes.size(); i++ ) {
       std::unique_ptr<TH3> Flux3D(static_cast<TH3 *>(NDFluxes[i]->Clone()));
@@ -540,10 +541,12 @@ public:
       // highCurrentBin = Flux3D->GetZaxis()->FindBin( CurrentRange.second );
 
       int lowCurrentBin = Flux3D->GetZaxis()->FindFixBin( fParams.CurrentRange.first );
+      int NominalZbin = Flux3D->GetZaxis()->FindFixBin( fParams.NominalFlux.second );
       int highCurrentBin = Flux3D->GetZaxis()->FindFixBin( fParams.CurrentRange.second );
       int zBins = ( highCurrentBin + 1 ) - lowCurrentBin;
       nZbins.emplace_back(zBins);
       std::cout << " lowCurrentBin : " << lowCurrentBin << std::endl;
+      std::cout << " NominalZbin : " << NominalZbin << std::endl;
       std::cout << " highCurrentBin : " << highCurrentBin << std::endl; 
       std::cout << " zBins : " << zBins << std::endl; 
 
@@ -604,6 +607,18 @@ public:
     	FluxesPerZ = FluxMatrix_zSlice.cols();
     
       }
+
+      if ( i == (fParams.NominalFlux.first - 1) ) {
+        for (int hist_it = 0; hist_it < i; hist_it++) {
+    	  NomRegFluxFirst += nZbins[hist_it]*FluxesPerZ;
+	}
+    	NomRegFluxFirst += (NominalZbin - lowCurrentBin)*FluxesPerZ + 1;
+
+	NomRegFluxLast += NomRegFluxFirst + FluxesPerZ - 1;
+	std::cout << "NomRegFluxFirst = " << NomRegFluxFirst << std::endl;
+	std::cout << "NomRegFluxLast = " << NomRegFluxLast<< std::endl;
+      }
+
     }
     Int_t NDrows = NDMatrices[0].rows();
     Int_t NDcols = NDMatrices[0].cols();
@@ -611,22 +626,13 @@ public:
     std::cout << "NDrows : " << NDrows << std::endl;
     std::cout << "NDcols : " << NDcols << std::endl;
 
-    std::cout << "NDrows : " << NDMatrices[1].rows() << std::endl;
-    std::cout << "NDcols : " << NDMatrices[1].cols() << std::endl;
-
     std::cout << "NDMatrices.size : " << NDMatrices.size() << std::endl;
 
     FluxMatrix_Full = Eigen::MatrixXd(NDrows, NDcols*NDMatrices.size());
     for (size_t n = 0; n < NDMatrices.size(); n++) {
-//      for (Int_t NDrow_it = 0; NDrow_it < NDrows) { 
-//        for (Int_t NDcol_it = 0; NDcol_it < NDcols) { 
-//	  FluxMatrix_Full( NDrow_it + n*NDrows, NDcol_it )
-//        }
-//      }
       std::cout << "n*NDrows : " << n*NDrows << std::endl;
       std::cout << "(n+1)*NDrows : " << (n+1)*NDrows << std::endl;
       std::cout << "NDcols : " << NDcols << std::endl;
-      // FluxMatrix_Full.block(0 + n*NDrows, 0, NDrows, NDcols) = NDMatrices[n];
       FluxMatrix_Full.block(0, 0 + n*NDcols, NDrows, NDcols) = NDMatrices[n];
     }
     //Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
@@ -878,22 +884,24 @@ public:
     size_t NFluxes = FluxMatrix_Solve.cols();
     size_t NEqs = FluxMatrix_Solve.rows();
     size_t NBins = NEqs - NFluxes;
+    //double NomRegFluxFirst, NomRegFluxLast;
 
     std::cout << "[INFO]: Solving with " << NBins << " energy bins." << std::endl;
     std::cout << "[INFO]: Solving with " << NFluxes << " fluxes." << std::endl;
     // std::cout << "[INFO]: Solving with " << NumBeamConfigs << " extra fluxes." << std::endl;
-    std::cout << "[INFO]: Solving with " << (nZbins[0] - 1)*FluxesPerZ << " extra fluxes." << std::endl;
+    std::cout << "[INFO]: Solving with " << NFluxes - ( 1 + NomRegFluxLast - NomRegFluxFirst ) << " extra fluxes." << std::endl;
     // << std::endl;
 
     if (use_reg) {
-      //size_t NExtraFluxes = NumBeamConfigs;
-      size_t NExtraFluxes = (nZbins[0] - 1)*FluxesPerZ;
-      std::cout << "NExtraFluxes : " << NExtraFluxes << std::endl;
+      size_t NExtraFluxes = 0;
       std::cout << "FluxesPerZ : " << FluxesPerZ << std::endl;
-      for (size_t z=1; z < nZbins.size(); z++) {
+      for (size_t z=0; z < nZbins.size(); z++) {
         NExtraFluxes += (nZbins[z]*FluxesPerZ);
       }
+      NExtraFluxes -= ( 1 + NomRegFluxLast - NomRegFluxFirst );
       std::cout << "NExtraFluxes : " << NExtraFluxes << std::endl;
+      std::cout << "NFluxes : " << NFluxes << std::endl;
+
 
       if (!NExtraFluxes) {
 	std::cout << NExtraFluxes << " extra fluxes, using normal reg" << std::endl;
@@ -903,26 +911,35 @@ public:
         }
         FluxMatrix_Solve(NEqs - 1, NFluxes - 1) = reg_param;
       }
+      else {
+	std::cout << NExtraFluxes << " extra fluxes, using uncorrelated reg for extra fluxes" << std::endl;
+        for (size_t row_it = 0; row_it < (NomRegFluxFirst - 1); ++row_it) {
+          FluxMatrix_Solve(row_it + NBins, row_it) = reg_param*BC_param;
+        }
+	std::cout << "(NomRegFluxFirst - 1) " << (NomRegFluxFirst - 1) << std::endl;
+        for (size_t row_it = (NomRegFluxFirst - 1); row_it < (NomRegFluxLast - 1)
+						 && row_it < (NFluxes - 1); ++row_it) {
+          FluxMatrix_Solve(row_it + NBins, row_it) = reg_param;
+          FluxMatrix_Solve(row_it + NBins, row_it + 1) = -reg_param;
+        }
+	std::cout << "(NomRegFluxLast - 1) " << (NomRegFluxLast - 1) << std::endl;
+	std::cout << "(NFluxes - 1) " << (NFluxes - 1) << std::endl;
+        //FluxMatrix_Solve( (NomRegFluxLast - 1) + NBins, (NomRegFluxLast - 1) ) = reg_param;
+        for (size_t row_it = (NomRegFluxLast-1); row_it < NFluxes; ++row_it) {
+          FluxMatrix_Solve(row_it + NBins, row_it) = reg_param*BC_param;
+        }
+      }
+/*
       else if (NExtraFluxes == NFluxes || NExtraFluxes >= NFluxes) {
 	std::cout << "Assuming all " << NFluxes << " NFluxes are additional beam configs" << std::endl;
         for (size_t row_it = 0; row_it < NFluxes; ++row_it) {
           FluxMatrix_Solve(row_it + NBins, row_it) = reg_param*BC_param;
         }
       }
-      else {
-	std::cout << NExtraFluxes << " extra fluxes, using uncorrelated reg for extra fluxes" << std::endl;
-        for (size_t row_it = 0; row_it < (NFluxes - (1+NExtraFluxes)); ++row_it) {
-          FluxMatrix_Solve(row_it + NBins, row_it) = reg_param;
-          FluxMatrix_Solve(row_it + NBins, row_it + 1) = -reg_param;
-        }
-	FluxMatrix_Solve((NFluxes - (1+NExtraFluxes)) + NBins, (NFluxes - (1+NExtraFluxes))) = reg_param;
-        for (size_t row_it = (NFluxes - NExtraFluxes); row_it < NFluxes; ++row_it) {
-          FluxMatrix_Solve(row_it + NBins, row_it) = reg_param*BC_param;
-        }
-      }
+*/
     }
-//    Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
-//    std::cout << FluxMatrix_Solve.format(CleanFmt) << std::endl;
+    // Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
+    // std::cout << FluxMatrix_Solve.format(CleanFmt) << std::endl;
 
     switch (fParams.algo_id) {
     case Params::kSVD: {

@@ -18,13 +18,15 @@ double OutOfRangeChi2Factor = 0.1;
 double BCRegFactor = 1E-2;
 double FitRangeLow = 0.5, FitRangeHigh = 10.0;
 double CurrentRangeLow = 75, CurrentRangeHigh = 350;
+double NominalHist = 4;
+double NominalCurrent = 293; 
 
 void SayUsage(char const *argv[]) {
   std::cout << "Runlike: " << argv[0]
             << " -N <NDFluxFile,NDFluxHistName> -F <FDFluxFile,FDFluxHistName> "
                "[-o Output.root -M <1:SVD, 2:QR, 3:Normal, 4:Inverse> -MX "
                "<NEnuBinMerge> -OR OutOfRangeChi2Factor -RF BeamConfigsRegFactor "
-	       "-B <ConfTree,ConfBranches> "
+	       "-B <ConfTree,ConfBranches> -Nom <NominalHist(number), NominalCurrent> "
 	       "-FR <FitRangeLow, FitRangeHigh> -CR <CurrentRangeLow, CurrentRangeHigh "
 	       "-OA <OffAxisLow_OffAxisHigh:BinWidth,....,OffAxisLow_OffAxisHigh:BinWidth> ]"
             << std::endl;
@@ -109,6 +111,23 @@ void handleOpts(int argc, char const *argv[]) {
       }
       CurrentRangeLow = str2T<double>(params[0]);
       CurrentRangeHigh = str2T<double>(params[1]);
+    } else if (std::string(argv[opt]) == "-Nom") {
+      std::vector<std::string> params =
+          ParseToVect<std::string>(argv[++opt], ",");
+      if (params.size() != 2) {
+        std::cout << "[ERROR]: Recieved " << params.size()
+                  << " entrys for -i, expected 2." << std::endl;
+        exit(1);
+      }
+      NominalHist = str2T<double>(params[0]);
+      NominalCurrent = str2T<double>(params[1]);
+      if ( NominalCurrent < CurrentRangeLow ||
+		 NominalCurrent > CurrentRangeHigh ) {
+        std::cout << "[ERROR]: Nominal Current " << NominalCurrent
+		  << " not in interval (" << CurrentRangeLow 
+		  << "," << CurrentRangeHigh << ")" << std::endl;
+	exit(1);
+      }
     } else if (std::string(argv[opt]) == "-MX") {
       NEnuBinMerge = str2T<int>(argv[++opt]);
     } else if (std::string(argv[opt]) == "-OA") {
@@ -169,6 +188,7 @@ int main(int argc, char const *argv[]) {
   p.ExpDecayRate = 3;
 
   p.CurrentRange = {CurrentRangeLow, CurrentRangeHigh};
+  p.NominalFlux = {NominalHist, NominalCurrent};
 
   // Chi2 factor out of fit range
   p.OORFactor = OutOfRangeChi2Factor;
