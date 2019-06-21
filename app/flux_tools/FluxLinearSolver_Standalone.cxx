@@ -18,14 +18,16 @@ double OutOfRangeChi2Factor = 0.1;
 double BCRegFactor = 1E-2;
 double FitRangeLow = 0.5, FitRangeHigh = 10.0;
 double CurrentRangeLow = 75, CurrentRangeHigh = 350;
-double NominalHist = 4;
+double coeffMagLimit = 0;
 double NominalCurrent = 293; 
+int NominalHist = 4;
 
 void SayUsage(char const *argv[]) {
   std::cout << "Runlike: " << argv[0]
             << " -N <NDFluxFile,NDFluxHistName> -F <FDFluxFile,FDFluxHistName> "
                "[-o Output.root -M <1:SVD, 2:QR, 3:Normal, 4:Inverse> -MX "
                "<NEnuBinMerge> -OR OutOfRangeChi2Factor -RF BeamConfigsRegFactor "
+               "-CML <CoeffMagLowerBound> "
 	       "-B <ConfTree,ConfBranches> -Nom <NominalHist(number), NominalCurrent> "
 	       "-FR <FitRangeLow, FitRangeHigh> -CR <CurrentRangeLow, CurrentRangeHigh "
 	       "-OA <OffAxisLow_OffAxisHigh:BinWidth,....,OffAxisLow_OffAxisHigh:BinWidth> ]"
@@ -119,7 +121,7 @@ void handleOpts(int argc, char const *argv[]) {
                   << " entrys for -i, expected 2." << std::endl;
         exit(1);
       }
-      NominalHist = str2T<double>(params[0]);
+      NominalHist = str2T<int>(params[0]);
       NominalCurrent = str2T<double>(params[1]);
       if ( NominalCurrent < CurrentRangeLow ||
 		 NominalCurrent > CurrentRangeHigh ) {
@@ -134,6 +136,8 @@ void handleOpts(int argc, char const *argv[]) {
       OARange = std::string(argv[++opt]);
     } else if (std::string(argv[opt]) == "-OR") {
       OutOfRangeChi2Factor = str2T<double>(argv[++opt]);
+    } else if (std::string(argv[opt]) == "-CML") {
+      coeffMagLimit = str2T<double>(argv[++opt]);
     } else if (std::string(argv[opt]) == "-RF") {
       BCRegFactor = str2T<double>(argv[++opt]);
     } else if ((std::string(argv[opt]) == "-?") ||
@@ -180,8 +184,8 @@ int main(int argc, char const *argv[]) {
   // the range to zero
 
   // Out of fit range sides to care about
-  // p.OORSide = FluxLinearSolver::Params::kLeft; // Try and fit low energy side
-  p.OORSide = FluxLinearSolver::Params::kBoth; // Try and fit both low and high energy side
+  p.OORSide = FluxLinearSolver::Params::kLeft; // Try and fit low energy side
+  //////*******************/////////p.OORSide = FluxLinearSolver::Params::kBoth; // Try and fit both low and high energy side
   // p.OORSide = Params::kRight; // Try and fit high energy side
 
   // Rate of gaussian decay for p.OORMode == Params::kGaussianDecay
@@ -192,6 +196,7 @@ int main(int argc, char const *argv[]) {
 
   // Chi2 factor out of fit range
   p.OORFactor = OutOfRangeChi2Factor;
+  p.coeffMagLower = coeffMagLimit;
   p.FitBetweenFoundPeaks = false;
   // p.FitBetween = {0.5,10.0};
    p.FitBetween = {FitRangeLow,FitRangeHigh};
@@ -212,8 +217,10 @@ int main(int argc, char const *argv[]) {
   // // Defaults to DUNE baseline;
   // fls.OscillateFDFlux(OscParameters, OscChannel);
 
-  size_t nsteps = 20;
+  size_t nsteps = 200;
   double start = -10;
+  // double start = -10;
+  // double end = -6;
   double end = -6;
   TGraph lcurve(nsteps);
   TGraph kcurve(nsteps - 8);
@@ -221,11 +228,18 @@ int main(int argc, char const *argv[]) {
 
   std::vector<double> eta_hat, rho_hat;
   for (size_t l_it = 0; l_it < nsteps; ++l_it) {
+    std::cout << "\n\n ------ Step : " << l_it << " ------ " << std::endl;
     double reg_exp = start + double(l_it) * step;
     // Passed parameter is regularization factor, should scan for the best one,
     double soln_norm, res_norm;
     fls.Solve(pow(10, reg_exp), BCRegFactor, res_norm, soln_norm);
 
+    //if (soln_norm == 0) {
+      std::cout << "soln_norm : " << soln_norm << std::endl;
+    //}
+    //if (res_norm == 0) {
+      std::cout << "res_norm : " << res_norm << std::endl;
+    //}
     eta_hat.push_back(log(soln_norm));
     rho_hat.push_back(log(res_norm));
 
