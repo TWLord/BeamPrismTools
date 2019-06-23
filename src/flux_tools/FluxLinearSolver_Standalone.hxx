@@ -1110,7 +1110,8 @@ public:
     FDFlux_targ->Reset();
     Eigen::VectorXd Target_rescale = Target;
     Target_rescale.topRows(FitIdxLow).array() /= fParams.OORFactor;
-    Target_rescale.bottomRows(NBins - FitIdxHigh).array() /= fParams.OORFactor;
+    // Target_rescale.bottomRows(NBins - FitIdxHigh).array() /= fParams.OORFactor;
+    Target_rescale.bottomRows(NEqs - (FitIdxHigh + 1) ).array() /= fParams.OORFactor;
     FillHistFromEigenVector(FDFlux_targ, Target_rescale, low_offset);
 
     TH1 *FDFlux_bf = static_cast<TH1 *>(FDFlux_osc->Clone("FDFlux_bf"));

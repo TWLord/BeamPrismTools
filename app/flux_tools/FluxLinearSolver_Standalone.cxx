@@ -184,8 +184,8 @@ int main(int argc, char const *argv[]) {
   // the range to zero
 
   // Out of fit range sides to care about
-  p.OORSide = FluxLinearSolver::Params::kLeft; // Try and fit low energy side
-  //////*******************/////////p.OORSide = FluxLinearSolver::Params::kBoth; // Try and fit both low and high energy side
+  // p.OORSide = FluxLinearSolver::Params::kLeft; // Try and fit low energy side
+  p.OORSide = FluxLinearSolver::Params::kBoth; // Try and fit both low and high energy side
   // p.OORSide = Params::kRight; // Try and fit high energy side
 
   // Rate of gaussian decay for p.OORMode == Params::kGaussianDecay
@@ -217,7 +217,7 @@ int main(int argc, char const *argv[]) {
   // // Defaults to DUNE baseline;
   // fls.OscillateFDFlux(OscParameters, OscChannel);
 
-  size_t nsteps = 200;
+  size_t nsteps = 20;
   double start = -10;
   // double start = -10;
   // double end = -6;
