@@ -19,6 +19,7 @@ double BCRegFactor = 1E-2;
 double FitRangeLow = 0.5, FitRangeHigh = 10.0;
 double CurrentRangeLow = 75, CurrentRangeHigh = 350;
 double coeffMagLimit = 0;
+int leastNCoeffs= 0;
 double NominalCurrent = 293; 
 int NominalHist = 4;
 
@@ -27,7 +28,7 @@ void SayUsage(char const *argv[]) {
             << " -N <NDFluxFile,NDFluxHistName> -F <FDFluxFile,FDFluxHistName> "
                "[-o Output.root -M <1:SVD, 2:QR, 3:Normal, 4:Inverse> -MX "
                "<NEnuBinMerge> -OR OutOfRangeChi2Factor -RF BeamConfigsRegFactor "
-               "-CML <CoeffMagLowerBound> "
+               "-CML <CoeffMagLowerBound> -CNL <CoefficientNumberLimit> "
 	       "-B <ConfTree,ConfBranches> -Nom <NominalHist(number), NominalCurrent> "
 	       "-FR <FitRangeLow, FitRangeHigh> -CR <CurrentRangeLow, CurrentRangeHigh "
 	       "-OA <OffAxisLow_OffAxisHigh:BinWidth,....,OffAxisLow_OffAxisHigh:BinWidth> ]"
@@ -138,6 +139,8 @@ void handleOpts(int argc, char const *argv[]) {
       OutOfRangeChi2Factor = str2T<double>(argv[++opt]);
     } else if (std::string(argv[opt]) == "-CML") {
       coeffMagLimit = str2T<double>(argv[++opt]);
+    } else if (std::string(argv[opt]) == "-CNL") {
+      leastNCoeffs= str2T<int>(argv[++opt]);
     } else if (std::string(argv[opt]) == "-RF") {
       BCRegFactor = str2T<double>(argv[++opt]);
     } else if ((std::string(argv[opt]) == "-?") ||
@@ -151,6 +154,12 @@ void handleOpts(int argc, char const *argv[]) {
       exit(1);
     }
     opt++;
+  }
+  if (coeffMagLimit && leastNCoeffs) { 
+      std::cout << "[ERROR]: Can only use either magnitude coeff limit OR number coefficient limit: \""
+                << std::endl;
+      SayUsage(argv);
+      exit(1);
   }
 }
 
@@ -197,6 +206,7 @@ int main(int argc, char const *argv[]) {
   // Chi2 factor out of fit range
   p.OORFactor = OutOfRangeChi2Factor;
   p.coeffMagLower = coeffMagLimit;
+  p.LeastNCoeffs = leastNCoeffs;
   p.FitBetweenFoundPeaks = false;
   // p.FitBetween = {0.5,10.0};
    p.FitBetween = {FitRangeLow,FitRangeHigh};

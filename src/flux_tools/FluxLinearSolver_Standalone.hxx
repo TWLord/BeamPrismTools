@@ -19,6 +19,43 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <algorithm>
+
+template<typename It>
+int min_k(It first, It last, int k){
+   k++; // k == 0 has to return smallest one element.
+   auto cmp_it_values1 = [](It lt, It rt){ return *lt < *rt;};
+   auto cmp_it_values2 = [](It lt, It rt){ return *lt <= *rt;};
+   auto max_copy = std::min<long>(k, std::distance(first, last));
+   auto start_it = first;
+   std::advance(start_it, max_copy);
+ 
+   // k++; // k == 0 has to return smallest one element.
+    std::vector<It> k_smallest;
+    k_smallest.reserve(k+1);
+    for(auto it = first; it != start_it; ++it){
+    	k_smallest.push_back(it);
+    }
+    std::stable_sort(k_smallest.begin(), k_smallest.end(), cmp_it_values1);
+ 
+    for(auto it = start_it; it != last; ++it){
+        if(k_smallest.empty() || *it <= *k_smallest.back()){
+            auto insertion_point = std::lower_bound(k_smallest.begin(), k_smallest.end(), 
+                                                    it, cmp_it_values2);
+            k_smallest.insert(insertion_point, it);
+            if(k_smallest.size() > k){
+                k_smallest.pop_back(); // Remove the largest value
+            }
+        }
+    }
+    // std::cout << "Distance to vect : " << std::distance(first,k_smallest.back()) << std::endl;
+    // int dist = std::distance(first,k_smallest.back());
+    // std::cout << dist << std::endl;
+    // std::cout << "*k_smallest.back() " << *k_smallest.back() << std::endl;
+    // return k_smallest.back(); // The iterator to the min(k, n) smallest value 
+    return (std::distance(first,k_smallest.back())); // The index of the min(k, n) smallest value 
+    // return dist; 
+}
 
 #ifdef FLS_WRAP_IN_NAMESPACE
 namespace fls {
@@ -381,6 +418,7 @@ public:
     double OORFactor;
 
     double coeffMagLower;
+    int LeastNCoeffs;
 
     bool FitBetweenFoundPeaks;
     std::pair<double, double> FitBetween;
@@ -418,6 +456,7 @@ public:
     p.NominalFlux = {4, 293};
     p.HConfigs = "1,2,3,4,5";
     p.coeffMagLower = 0.0;
+    p.LeastNCoeffs= 0;
 
     return p;
   }
@@ -1063,13 +1102,22 @@ public:
     std::cout << " soln_norm = " << soln_norm << std::endl;
 
     UseFluxesNew = UseFluxesOld;
-    for ( int sol_iter = 0; sol_iter < last_solution.rows(); sol_iter++) {
+    /*for ( int sol_iter = 0; sol_iter < last_solution.rows(); sol_iter++) {
       // std::cout << " last_solution " << sol_iter << " : " << last_solution(sol_iter) << std::endl;
       if ( sol_iter < (NomRegFluxFirst - 1) || sol_iter > (NomRegFluxLast-1) ) {
         if ( std::abs(last_solution(sol_iter)) < fParams.coeffMagLower ) {
 	  UseFluxesOld[sol_iter] = false; 
         }
       }
+    }*/
+
+    if (fParams.LeastNCoeffs) {
+	std::cout << "fParams.LeastNCoeffs : " << fParams.LeastNCoeffs << std::endl; 
+	UseFluxesOld = RemoveNCoeffs(last_solution, NFluxes);
+    }
+    else if (fParams.coeffMagLower) {
+	std::cout << "fParams.coeffMagLower : " << fParams.coeffMagLower << std::endl; 
+	UseFluxesOld = RemoveCoeffsSize(last_solution, NFluxes);
     }
 
     int NewEmptyFluxes = 0;
@@ -1082,6 +1130,10 @@ public:
     loops++;
    }
    std::cout << "\n ------ Loops : " << loops << " ------ " << std::endl;
+   if (fParams.LeastNCoeffs && loops != 2) {
+	std::cout << "[ERROR] : Loops != 2, implies RemoveNCoeffs not working correctly" << std::endl; 
+        exit(1);
+   }
    return last_solution;
   }
   Eigen::VectorXd Solve(double reg_param = 0, double BC_param = 1) {
@@ -1089,6 +1141,65 @@ public:
     std::cout << "reg_param = " << reg_param << std::endl; 
     std::cout << "BC_param = " << BC_param << std::endl; 
     return Solve(reg_param, BC_param, dum1, dum2);
+  }
+
+  std::vector<bool> RemoveNCoeffs(Eigen::VectorXd last_solution, size_t NFluxes) {
+    std::vector<double> coeffVec(last_solution.data(), last_solution.data() + last_solution.rows() * last_solution.cols());
+   /* 
+    std::cout << "coeffVec.size() : " << coeffVec.size() << std::endl;
+    std::cout << "NomRegFluxFirst :" << NomRegFluxFirst << std::endl;
+    std::cout << "NomRegFluxLast :" << NomRegFluxLast << std::endl;
+    std::cout << "coeffVec elements : " << std::endl;
+    int counter = 0;
+    */
+    for (double &cV_it : coeffVec) {
+	cV_it = std::abs(cV_it);	
+	// std::cout << "coeffVec[" << counter << "]" << cV_it << std::endl;
+	// counter++;
+    }
+    
+    std::vector<bool> newFluxVec(NFluxes,true);
+    // std::vector<bool> newFluxVec = UseFluxesOld;
+    int ParN = fParams.LeastNCoeffs;
+    for (int elem = 0; elem < ParN; elem++) {
+	// std::cout << "k : " << elem << std::endl;
+	// std::cout << "ParN : " << ParN << std::endl;
+	int k_index = min_k(coeffVec.begin(), coeffVec.end(), elem);
+	if ( k_index >= (NomRegFluxFirst-1) && k_index <= (NomRegFluxLast-1) ) {
+	    ParN++;
+	    continue;
+	}
+	// std::cout << "(NomRegFluxFirst-1) : " << (NomRegFluxFirst-1) << std::endl;
+	// std::cout << "(NomRegFluxLast-1) : " << (NomRegFluxLast-1) << std::endl;
+	// std::cout << "k : " << elem << std::endl;
+	// std::cout << k_index << std::endl;
+	// std::cout << "coeffVec[" << k_index << "] = " << coeffVec[k_index] << "\n" << std::endl;
+	// newFluxVec[k_index] = false; 
+	if (newFluxVec[k_index]) {
+	    newFluxVec[k_index] = false; 
+	}
+	else {
+	    std::cout << "[ERROR] newFluxVec[" << k_index << "] : already scanned. Double-counting." << std::endl;
+	    exit(1);
+	}
+    }
+    return newFluxVec;
+  }
+
+  std::vector<bool> RemoveCoeffsSize(Eigen::VectorXd last_solution, size_t NFluxes) {
+    // std::vector<bool> newFluxVec(NFluxes,true);
+    std::vector<bool> newFluxVec = UseFluxesOld;
+    // std::cout << "NomRegFluxFirst :" << NomRegFluxFirst << std::endl;
+    // std::cout << "NomRegFluxLast :" << NomRegFluxLast << std::endl;
+    for ( int sol_iter = 0; sol_iter < last_solution.rows(); sol_iter++) {
+      // std::cout << " last_solution " << sol_iter << " : " << last_solution(sol_iter) << std::endl;
+      if ( sol_iter < (NomRegFluxFirst - 1) || sol_iter > (NomRegFluxLast-1) ) {
+        if ( std::abs(last_solution(sol_iter)) < fParams.coeffMagLower ) {
+	  newFluxVec[sol_iter] = false; 
+        }
+      }
+    }
+    return newFluxVec;
   }
 
   void Write(TDirectory *td) {
