@@ -1110,10 +1110,10 @@ public:
     }
     case Params::kCOD: {
       if (use_reg) {
-        last_solution = FluxMatrix_Reduced.CompleteOrthogonalDecomposition().solve(Target);
+        last_solution = FluxMatrix_Reduced.completeOrthogonalDecomposition().solve(Target);
       } else {
         last_solution =
-            FluxMatrix_Reduced.topRows(NBins).CompleteOrthogonalDecomposition().solve(
+            FluxMatrix_Reduced.topRows(NBins).completeOrthogonalDecomposition().solve(
                 Target.topRows(NBins));
       }
       break;
@@ -1212,8 +1212,8 @@ public:
     }
     
     std::vector<bool> newFluxVec(NFluxes,true);
-    // std::vector<bool> newFluxVec = UseFluxesOld;
-    int ParN = fParams.LeastNCoeffs;
+    // int ParN = fParams.LeastNCoeffs;
+    int ParN = NFluxes - fParams.LeastNCoeffs;
     for (int elem = 0; elem < ParN; elem++) {
 	// std::cout << "k : " << elem << std::endl;
 	// std::cout << "ParN : " << ParN << std::endl;
