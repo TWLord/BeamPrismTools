@@ -4,7 +4,7 @@
 
 std::string OutputFile = "FluxLinearSolver.root";
 
-std::string NDFile, FDFile, FDHist, BCTree, BCBranches;
+std::string NDFile, FDFile, FDHist, WFile, BCTree, BCBranches;
 
 std::vector<std::string> NDHists;
 
@@ -13,6 +13,8 @@ std::string OARange;
 int NEnuBinMerge = 0;
 
 int method = 1;
+int weightmethod = 1;
+size_t nsteps = 20;
 
 double OutOfRangeChi2Factor = 0.1;
 double BCRegFactor = 1E-2;
@@ -26,7 +28,8 @@ int NominalHist = 4;
 void SayUsage(char const *argv[]) {
   std::cout << "Runlike: " << argv[0]
             << " -N <NDFluxFile,NDFluxHistName> -F <FDFluxFile,FDFluxHistName> "
-               "[-o Output.root -M <1:SVD, 2:QR, 3:Normal, 4:Inverse> -MX "
+	       "[ -W <FDWeightFile> -WM <1:TotalFlux, 2:MaxFlux>		"
+               "-o Output.root -M <1:SVD, 2:QR, 3:Normal, 4:Inverse> -MX "
                "<NEnuBinMerge> -OR OutOfRangeChi2Factor -RF BeamConfigsRegFactor "
                "-CML <CoeffMagLowerBound> -CNL <CoefficientNumberLimit> "
 	       "-B <ConfTree,ConfBranches> -Nom <NominalHist(number), NominalCurrent> "
@@ -75,6 +78,16 @@ void handleOpts(int argc, char const *argv[]) {
       }
       FDFile = params[0];
       FDHist = params[1];
+    } else if (std::string(argv[opt]) == "-W") {
+      WFile = std::string(argv[++opt]);
+    } else if (std::string(argv[opt]) == "-WM") {
+      weightmethod = str2T<int>(argv[++opt]);
+      if ((weightmethod < 1) || (weightmethod > 2)) {
+        std::cout
+            << "[WARN]: Invalid option for weighting method, defaulting to total flux weighting."
+            << std::endl;
+        weightmethod = 1;
+      }
     } else if (std::string(argv[opt]) == "-B") {
       std::vector<std::string> params =
           ParseToVect<std::string>(argv[++opt], ",");
@@ -141,6 +154,8 @@ void handleOpts(int argc, char const *argv[]) {
       coeffMagLimit = str2T<double>(argv[++opt]);
     } else if (std::string(argv[opt]) == "-CNL") {
       leastNCoeffs= str2T<int>(argv[++opt]);
+    } else if (std::string(argv[opt]) == "-NSTEPS") {
+      nsteps = str2T<int>(argv[++opt]);
     } else if (std::string(argv[opt]) == "-RF") {
       BCRegFactor = str2T<double>(argv[++opt]);
     } else if ((std::string(argv[opt]) == "-?") ||
@@ -215,6 +230,8 @@ int main(int argc, char const *argv[]) {
   // Use 0.5 m flux windows between -0.25 m and 32.5 m (65)
   //p.OffAxisRangesDescriptor = "-1.45_37.55:0.1";
   p.OffAxisRangesDescriptor = OARange;
+  p.WFile = WFile;
+  p.WeightMethod = FluxLinearSolver::Params::Weighting(weightmethod);
   //p.OffAxisRangesDescriptor = "-1.45_32.45:0.1,37.45_37.55:0.1";
 
   fls.Initialize(p, {NDFile, NDHists}, {FDFile, FDHist}, {BCTree, BCBranches}, true);
@@ -227,11 +244,11 @@ int main(int argc, char const *argv[]) {
   // // Defaults to DUNE baseline;
   // fls.OscillateFDFlux(OscParameters, OscChannel);
 
-  size_t nsteps = 20;
+  // size_t nsteps = 20;
+  // double start = -18;
   double start = -10;
-  // double start = -10;
-  // double end = -6;
   double end = -6;
+  // double end = -2;
   TGraph lcurve(nsteps);
   TGraph kcurve(nsteps - 8);
   double step = double(end - start) / double(nsteps);

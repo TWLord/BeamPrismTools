@@ -437,6 +437,13 @@ public:
     std::pair<int, double> NominalFlux;
 
     std::string HConfigs;
+
+    std::string WFile;
+
+    enum Weighting { TotalFlux = 1, MaxFlux };
+
+    Weighting WeightMethod;
+
   };
   Params fParams;
 
@@ -457,6 +464,8 @@ public:
     p.HConfigs = "1,2,3,4,5";
     p.coeffMagLower = 0.0;
     p.LeastNCoeffs= 0;
+    p.WFile = "";
+    p.WeightMethod = Params::TotalFlux;
 
     return p;
   }
@@ -468,15 +477,20 @@ public:
   Eigen::MatrixXd FluxMatrix_Reduced;
   Eigen::VectorXd Target;
 
+  Eigen::MatrixXd FDWeights;
+
   Eigen::VectorXd last_solution;
 
   std::unique_ptr<TH1> FDFlux_unosc;
   std::unique_ptr<TH1> FDFlux_osc;
 
   std::unique_ptr<TTree> BCTree;
+  
+  Double_t RegParam;
+  Double_t BCParam;
 
-  Int_t NumBeamConfigs = 0;
-  Int_t TotalNumBeamConfigs = 0;
+  // Int_t NumBeamConfigs = 0;
+  // Int_t TotalNumBeamConfigs = 0;
   size_t NCoefficients;
   std::vector<size_t> nZbins;
   size_t NomRegFluxFirst = 0, NomRegFluxLast = 0;
@@ -484,7 +498,7 @@ public:
   size_t low_offset, FitIdxLow, FitIdxHigh;
   std::vector<bool> UseFluxesOld; 
   std::vector<bool> UseFluxesNew; 
-  // double CoeffMagLower = 0;
+  bool ApplyWeightings = false;
 
   void
   Initialize(Params const &p,
@@ -533,7 +547,6 @@ public:
     } 
     SetNDFluxes(std::move(Flux3DList));
     // end ND setup
-//////////////////////////////// editing above ^
 
     if (FDFluxDescriptor.first.size() && FDFluxDescriptor.second.size()) {
 
@@ -546,7 +559,13 @@ public:
         BuildTargetFlux();
       }
     }
-    TFile *BCfile = CheckOpenFile(NDFluxDescriptor.first);
+
+    if (fParams.WFile.size()) {
+      std::cout << "[INFO]: Using FD Flux Reg Weighting" << std::endl;
+      BuildWeights(NDFluxDescriptor.second);
+    }
+
+    /*TFile *BCfile = CheckOpenFile(NDFluxDescriptor.first);
     TTree *BCtree = (TTree*)BCfile->Get((NDBeamConfDescriptor.first).c_str());
     if (!BCtree) {
       std::cout << "Couldn't find config tree: " << (NDBeamConfDescriptor.first).c_str() << std::endl;
@@ -561,6 +580,7 @@ public:
 	TotalNumBeamConfigs += NumBeamConfigs;
     }
     std::cout << "Number of additional beam configs in file = " << TotalNumBeamConfigs << std::endl;
+    */
   }
 
   void SetNDFluxes(std::vector<std::unique_ptr<TH3>> const &NDFluxes, bool ApplyXRanges = true) {
@@ -573,6 +593,7 @@ public:
     std::vector<int> Confs;
     if (fParams.HConfigs.size()) {
       Confs = BuildHConfsList(fParams.HConfigs);
+      // consider removing (+ BuildHConfsList function) 
     }
 
     // std::cout << NDFluxes[0]->GetNbinsZ() << std::endl;
@@ -581,10 +602,6 @@ public:
     for (size_t i = 0; i < NDFluxes.size(); i++ ) {
       std::unique_ptr<TH3> Flux3D(static_cast<TH3 *>(NDFluxes[i]->Clone()));
       Flux3D->SetDirectory(nullptr);
-
-      // might want FindFixBin?
-      // lowCurrentBin = Flux3D->GetZaxis()->FindBin( CurrentRange.first );
-      // highCurrentBin = Flux3D->GetZaxis()->FindBin( CurrentRange.second );
 
       int lowCurrentBin = Flux3D->GetZaxis()->FindFixBin( fParams.CurrentRange.first );
       int NominalZbin = Flux3D->GetZaxis()->FindFixBin( fParams.NominalFlux.second );
@@ -650,6 +667,7 @@ public:
         }
 	NDMatrices.emplace_back(FluxMatrix_zSlice);
     	FluxesPerZ = FluxMatrix_zSlice.cols();
+	// std::cout << "FluxesPerZ : " << FluxesPerZ << std::endl;
 	// Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
 	// std::cout << FluxMatrix_zSlice.format(CleanFmt) << std::endl;
 	
@@ -688,6 +706,11 @@ public:
     // Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
     // std::cout << FluxMatrix_Full.format(CleanFmt) << std::endl;
     NCoefficients = FluxMatrix_Full.cols();
+
+    if ( NCoefficients < fParams.LeastNCoeffs ) {
+      std::cout << "[ERROR] : -CNL = " << fParams.LeastNCoeffs << " larger than NFluxes : " << NCoefficients << std::endl;
+      exit(1);
+    }
 
   }
 
@@ -992,9 +1015,27 @@ public:
      }
 */
 
+     if (ApplyWeightings && fParams.WFile.size()) {
+       // FluxMatrix_Reduced = FluxMatrix_Solve;
+       // FluxMatrix_Reduced.bottomRows(NFluxes) = FluxMatrix_Solve.bottomRows(NFluxes) * (FDWeights);
+       // FluxMatrix_Solve = FluxMatrix_Reduced;
+       //
+      
+       FluxMatrix_Solve.bottomRows(NFluxes) = (FluxMatrix_Solve.bottomRows(NFluxes) * FDWeights).eval();
+       FluxMatrix_Reduced = FluxMatrix_Solve;
+     }
+     else {
+       FluxMatrix_Reduced = FluxMatrix_Solve;
+     }
    }
+    Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
+    // std::cout << FDWeights.inverse().format(CleanFmt) << std::endl;
 
-   FluxMatrix_Reduced = FluxMatrix_Solve;
+    // std::cout << "FluxMatrix_Solve" << std::endl;
+    // std::cout << "NFluxes " << NFluxes << std::endl;
+    // Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
+    // std::cout << FluxMatrix_Solve.format(CleanFmt) << std::endl;
+    // std::cout << FluxMatrix_Solve.bottomRows(NFluxes).format(CleanFmt) << std::endl;
 
    while ( UseFluxesOld != UseFluxesNew ) {
 
@@ -1140,6 +1181,8 @@ public:
     double dum1, dum2;
     std::cout << "reg_param = " << reg_param << std::endl; 
     std::cout << "BC_param = " << BC_param << std::endl; 
+    RegParam = reg_param;
+    BCParam = BC_param;
     return Solve(reg_param, BC_param, dum1, dum2);
   }
 
@@ -1179,7 +1222,7 @@ public:
 	    newFluxVec[k_index] = false; 
 	}
 	else {
-	    std::cout << "[ERROR] newFluxVec[" << k_index << "] : already scanned. Double-counting." << std::endl;
+	    std::cout << "[ERROR] newFluxVec[" << k_index << "] : already scanned. Double-counting flux no.: " << elem << std::endl;
 	    exit(1);
 	}
     }
@@ -1200,6 +1243,112 @@ public:
       }
     }
     return newFluxVec;
+  }
+
+  void BuildWeights(std::vector<std::string> HistNames) {
+
+   // GetFlux
+   std::vector<Eigen::MatrixXd> FluxWeightMatrices;
+   double nomFluxWeight = 0;
+   for (size_t hist_it=0; hist_it < HistNames.size(); hist_it++) {
+     if (fParams.WFile.size() && HistNames.size()) {
+       ApplyWeightings = true;
+
+       std::unique_ptr<TH2> inpFluxWeightHist =
+           GetHistogram<TH2>(fParams.WFile, HistNames[hist_it]);
+
+       if (!inpFluxWeightHist) {
+         std::cout << "[ERROR]: Found no input FD weight flux with name: \"" 
+                   << fParams.WFile << "\" in file: \"" 
+                   << HistNames[hist_it] << "\"." << std::endl;
+         throw;
+       }
+       std::unique_ptr<TH2> FluxWeightHist(static_cast<TH2 *>(inpFluxWeightHist->Clone()));
+       FluxWeightHist->SetDirectory(nullptr);
+////////////////////////////////////////////
+   // OscillateFlux here ? Maybe hijack other function
+///////////////////////////////////////////
+
+       int lowCurrBin = FluxWeightHist->GetYaxis()->FindFixBin( fParams.CurrentRange.first );
+       int nomCurrBin = FluxWeightHist->GetYaxis()->FindFixBin( fParams.NominalFlux.second );
+       int highCurrBin = FluxWeightHist->GetYaxis()->FindFixBin( fParams.CurrentRange.second );
+       int yBins = ( highCurrBin + 1 ) - lowCurrBin;
+
+       Eigen::MatrixXd InitWeightMat = Eigen::MatrixXd::Zero(FluxWeightHist->GetXaxis()->GetNbins(), yBins);
+       for (Int_t ybi_it = 0; ybi_it < yBins; 
+            ++ybi_it) {
+         for (Int_t ebi_it = 0; ebi_it < FluxWeightHist->GetXaxis()->GetNbins();
+              ++ebi_it) {
+           InitWeightMat(ebi_it, ybi_it) =
+               FluxWeightHist->GetBinContent(ebi_it + 1, ybi_it + lowCurrBin);
+         }
+       }
+
+   // Transform InitWeightMat 
+       Int_t InitMrows = InitWeightMat.rows();
+       Int_t InitMcols = InitWeightMat.cols();
+
+       switch (fParams.WeightMethod) {
+       case Params::TotalFlux: {
+         for (Int_t ybi_it = 0; ybi_it < InitMcols;
+              ++ybi_it) {
+           double ColumnSum = 0;
+           for (Int_t ebi_it = 0; ebi_it < InitMrows;
+                ++ebi_it) {
+             ColumnSum += InitWeightMat(ebi_it, ybi_it);
+  	     // InitWeightMat(ebi_it, ybi_it) = 0;
+           }
+	   InitWeightMat.col(ybi_it).setZero();
+	   InitWeightMat(ybi_it, ybi_it) = 1.0/ColumnSum;
+         }
+         break;
+       }
+       case Params::MaxFlux: {
+         for (Int_t ybi_it = 0; ybi_it < InitMcols;
+              ++ybi_it) {
+           double ColumnMax = 0;
+           for (Int_t ebi_it = 0; ebi_it < InitMrows;
+                ++ebi_it) {
+	     if (InitWeightMat(ebi_it, ybi_it) > ColumnMax) {
+               ColumnMax = InitWeightMat(ebi_it, ybi_it);
+             }
+  	     // InitWeightMat(ebi_it, ybi_it) = 0;
+           }
+	   InitWeightMat.col(ybi_it).setZero();
+           InitWeightMat(ybi_it, ybi_it) = 1.0/ColumnMax;
+         }
+         break;
+       }
+       }
+
+   // Scale up InitWeightMat to match number of OA flux slices
+       Eigen::MatrixXd TmpWeightMat = Eigen::MatrixXd::Zero(yBins*FluxesPerZ, yBins*FluxesPerZ);
+       for (Int_t ybi_it = 0; ybi_it < yBins; ++ybi_it) {
+         for (Int_t ebi_it = 0; ebi_it < yBins; ++ebi_it) {
+           for (Int_t fpz_it = 0; fpz_it < FluxesPerZ; fpz_it++) {
+             TmpWeightMat(ebi_it*FluxesPerZ + fpz_it, ybi_it*FluxesPerZ + fpz_it) = InitWeightMat(ebi_it, ybi_it);
+	   }
+	 }
+       }
+
+       if (hist_it == (fParams.NominalFlux.first - 1) ) {
+         nomFluxWeight = TmpWeightMat( (nomCurrBin-lowCurrBin)*FluxesPerZ, (nomCurrBin-lowCurrBin)*FluxesPerZ );
+       }
+       FluxWeightMatrices.emplace_back(TmpWeightMat);
+     }
+   }
+
+   Int_t FDWrows = FluxWeightMatrices[0].rows();
+   Int_t FDWcols = FluxWeightMatrices[0].cols();
+
+   // StoreFlux
+   FDWeights = Eigen::MatrixXd::Zero(FDWrows*FluxWeightMatrices.size(), FDWcols*FluxWeightMatrices.size());
+   for (size_t n = 0; n < FluxWeightMatrices.size(); n++) {
+     FDWeights.block(0 + n*FDWrows, 0 + n*FDWcols, FDWrows, FDWcols) = FluxWeightMatrices[n];
+   }
+   FDWeights /= nomFluxWeight;
+   // Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
+   // std::cout << FDWeights.format(CleanFmt) << std::endl;
   }
 
   void Write(TDirectory *td) {
@@ -1235,6 +1384,44 @@ public:
         new TH1D("Coeffs", "", last_solution.rows(), 0, last_solution.rows());
     FillHistFromEigenVector(Coeffs, last_solution);
 
+    TH1D *RegDiag=
+        new TH1D("RegMatrixDiagonal", "", NFluxes, 0, NFluxes);
+    Eigen::VectorXd RegDiagVec = last_solution;
+    RegDiagVec.setZero();
+    for (int reg_iter = 0; reg_iter < NFluxes; reg_iter++) {
+        RegDiagVec(reg_iter) = FluxMatrix_Reduced.bottomRows(NFluxes)(reg_iter, reg_iter);
+
+	// std::cout << "[" << reg_iter << "," << reg_iter << "] = " << FluxMatrix_Reduced.bottomRows(NFluxes)(reg_iter, reg_iter) << std::endl;
+	// if (reg_iter!=NFluxes-1) {
+	    // std::cout << "[" << reg_iter << "," << reg_iter+1 << "] = " << FluxMatrix_Reduced.bottomRows(NFluxes)(reg_iter, reg_iter+1) << std::endl;
+	// }
+    }
+
+    /*TH1D *RegDiag=
+        new TH1D("RegMatrixDiagonal", "", NFluxes, 0, NFluxes);
+    Eigen::VectorXd RegDiagVec = last_solution.setZero();
+    for (int reg_iter = 0; reg_iter < 1+(NFluxes)/2; reg_iter+=2) {
+        RegDiagVec(reg_iter) = FluxMatrix_Reduced.bottomRows(NFluxes)(reg_iter, reg_iter);
+        RegDiagVec(reg_iter+1) = FluxMatrix_Reduced.bottomRows(NFluxes)(reg_iter, reg_iter+1);
+    }*/
+    FillHistFromEigenVector(RegDiag, RegDiagVec);
+    /*Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
+    std::cout << FluxMatrix_Reduced.format(CleanFmt) << std::endl;
+    std::cout << "FluxMatrix_Reduced.rows() : " << FluxMatrix_Reduced.rows() << std::endl;
+    std::cout << "FluxMatrix_Reduced.cols() : " << FluxMatrix_Reduced.cols() << std::endl;
+
+    std::cout << "FDWeights :" << std::endl;
+    std::cout << FDWeights.format(CleanFmt) << std::endl;
+
+    std::cout << "last_solution:" << std::endl;
+    std::cout << last_solution.format(CleanFmt) << std::endl;*/
+
+    TTree *ParTree =
+        new TTree("Params", "Params"); 
+    ParTree->Branch("RegParam", &RegParam, "RegParam/D");
+    ParTree->Branch("BCParam", &BCParam, "BCParam/D");
+    ParTree->Fill();
+
     if (BCTree) { 
       static_cast<TTree *>(BCTree->Clone("ConfigTree"))->SetDirectory(td);
     }
@@ -1248,6 +1435,8 @@ public:
     FDFlux_targ_OORScale->SetDirectory(td);
     FDFlux_bf->SetDirectory(td);
     Coeffs->SetDirectory(td);
+    ParTree->SetDirectory(td);
+    // ParTree->Write();
 //    BCTree->SetDirectory(td);
   }
 };
