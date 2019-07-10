@@ -389,7 +389,7 @@ class FluxLinearSolver {
 
 public:
   struct Params {
-    enum Solver { kSVD = 1, kQR, kNormal, kInverse };
+    enum Solver { kSVD = 1, kQR, kNormal, kInverse, kCOD };
 
     Solver algo_id;
 
@@ -1105,6 +1105,16 @@ public:
                             .inverse() *
                         FluxMatrix_Reduced.topRows(NBins).transpose() *
                         Target.topRows(NBins);
+      }
+      break;
+    }
+    case Params::kCOD: {
+      if (use_reg) {
+        last_solution = FluxMatrix_Reduced.CompleteOrthogonalDecomposition().solve(Target);
+      } else {
+        last_solution =
+            FluxMatrix_Reduced.topRows(NBins).CompleteOrthogonalDecomposition().solve(
+                Target.topRows(NBins));
       }
       break;
     }

@@ -29,7 +29,7 @@ void SayUsage(char const *argv[]) {
   std::cout << "Runlike: " << argv[0]
             << " -N <NDFluxFile,NDFluxHistName> -F <FDFluxFile,FDFluxHistName> "
 	       "[ -W <FDWeightFile> -WM <1:TotalFlux, 2:MaxFlux>		"
-               "-o Output.root -M <1:SVD, 2:QR, 3:Normal, 4:Inverse> -MX "
+               "-o Output.root -M <1:SVD, 2:QR, 3:Normal, 4:Inverse, 5:COD> -MX "
                "<NEnuBinMerge> -OR OutOfRangeChi2Factor -RF BeamConfigsRegFactor "
                "-CML <CoeffMagLowerBound> -CNL <CoefficientNumberLimit> "
 	       "-B <ConfTree,ConfBranches> -Nom <NominalHist(number), NominalCurrent> "
@@ -101,7 +101,7 @@ void handleOpts(int argc, char const *argv[]) {
 //      BCTree = "ConfigTree";
     } else if (std::string(argv[opt]) == "-M") {
       method = str2T<int>(argv[++opt]);
-      if ((method < 1) || (method > 4)) {
+      if ((method < 1) || (method > 5)) {
         std::cout
             << "[WARN]: Invalid option for solving method, defaulting to QR."
             << std::endl;
