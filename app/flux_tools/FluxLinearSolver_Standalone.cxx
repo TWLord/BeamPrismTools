@@ -9,6 +9,7 @@ std::string NDFile, FDFile, FDHist, WFile, BCTree, BCBranches;
 std::vector<std::string> NDHists;
 
 std::string OARange;
+std::string NomOARange = "";
 
 int NEnuBinMerge = 0;
 
@@ -29,12 +30,13 @@ void SayUsage(char const *argv[]) {
   std::cout << "Runlike: " << argv[0]
             << " -N <NDFluxFile,NDFluxHistName> -F <FDFluxFile,FDFluxHistName> "
 	       "[ -W <FDWeightFile> -WM <1:TotalFlux, 2:MaxFlux>		"
-               "-o Output.root -M <1:SVD, 2:QR, 3:Normal, 4:Inverse, 5:COD> -MX "
+               "-o Output.root -M <1:SVD, 2:QR, 3:Normal, 4:Inverse, 5:COD, 6:ConjugateGradient, 7:LeastSquaresConjugateGradient, 8: BiCGSTAB, 9: BiCGSTAB w/ last sol'n guess> -MX "
                "<NEnuBinMerge> -OR OutOfRangeChi2Factor -RF BeamConfigsRegFactor "
                "-CML <CoeffMagLowerBound> -CNL <CoefficientNumberLimit> "
 	       "-B <ConfTree,ConfBranches> -Nom <NominalHist(number), NominalCurrent> "
 	       "-FR <FitRangeLow, FitRangeHigh> -CR <CurrentRangeLow, CurrentRangeHigh "
 	       "-OA <OffAxisLow_OffAxisHigh:BinWidth,....,OffAxisLow_OffAxisHigh:BinWidth> ]"
+	       "-NOA <NOALow_NOAHigh:BinWidth,....,NOALow_NOAHigh:BinWidth> ]"
             << std::endl;
 }
 
@@ -101,7 +103,7 @@ void handleOpts(int argc, char const *argv[]) {
 //      BCTree = "ConfigTree";
     } else if (std::string(argv[opt]) == "-M") {
       method = str2T<int>(argv[++opt]);
-      if ((method < 1) || (method > 5)) {
+      if ((method < 1) || (method > 9)) {
         std::cout
             << "[WARN]: Invalid option for solving method, defaulting to QR."
             << std::endl;
@@ -144,10 +146,17 @@ void handleOpts(int argc, char const *argv[]) {
 		  << "," << CurrentRangeHigh << ")" << std::endl;
 	exit(1);
       }
+      if ( NominalHist > NDHists.size() ) {
+        std::cout << "[ERROR]: Nominal Hist = " << NominalHist
+		  << " larger than hists passed to fit" << std::endl; 
+	exit(1);
+      }
     } else if (std::string(argv[opt]) == "-MX") {
       NEnuBinMerge = str2T<int>(argv[++opt]);
     } else if (std::string(argv[opt]) == "-OA") {
       OARange = std::string(argv[++opt]);
+    } else if (std::string(argv[opt]) == "-NOA") {
+      NomOARange = std::string(argv[++opt]);
     } else if (std::string(argv[opt]) == "-OR") {
       OutOfRangeChi2Factor = str2T<double>(argv[++opt]);
     } else if (std::string(argv[opt]) == "-CML") {
@@ -230,6 +239,11 @@ int main(int argc, char const *argv[]) {
   // Use 0.5 m flux windows between -0.25 m and 32.5 m (65)
   //p.OffAxisRangesDescriptor = "-1.45_37.55:0.1";
   p.OffAxisRangesDescriptor = OARange;
+  p.NominalOffAxisRangesDescriptor = NomOARange;
+  /*p.NominalOffAxisRangesDescriptor = OARange;
+  if ( NomOARange != "" ) {
+  	p.NominalOffAxisRangesDescriptor = NomOARange;
+  }*/
   p.WFile = WFile;
   p.WeightMethod = FluxLinearSolver::Params::Weighting(weightmethod);
   //p.OffAxisRangesDescriptor = "-1.45_32.45:0.1,37.45_37.55:0.1";
@@ -247,7 +261,7 @@ int main(int argc, char const *argv[]) {
   // size_t nsteps = 20;
   // double start = -18;
   double start = -10;
-  double end = -6;
+  double end = -7;
   // double end = -2;
   TGraph lcurve(nsteps);
   TGraph kcurve(nsteps - 8);
@@ -260,13 +274,8 @@ int main(int argc, char const *argv[]) {
     // Passed parameter is regularization factor, should scan for the best one,
     double soln_norm, res_norm;
     fls.Solve(pow(10, reg_exp), BCRegFactor, res_norm, soln_norm);
-
-    //if (soln_norm == 0) {
-      std::cout << "soln_norm : " << soln_norm << std::endl;
-    //}
-    //if (res_norm == 0) {
-      std::cout << "res_norm : " << res_norm << std::endl;
-    //}
+    std::cout << "soln_norm : " << soln_norm << std::endl;
+    std::cout << "res_norm : " << res_norm << std::endl;
     eta_hat.push_back(log(soln_norm));
     rho_hat.push_back(log(res_norm));
 
@@ -293,10 +302,11 @@ int main(int argc, char const *argv[]) {
     }
   }
 
-  fls.Solve(best_reg, BCRegFactor);
+  double soln_norm=0, res_norm=0;
+  fls.SolveLast(best_reg, BCRegFactor, res_norm, soln_norm);
 
   TFile *f = CheckOpenFile(OutputFile, "RECREATE");
-  fls.Write(f);
+  fls.Write(f, res_norm, soln_norm);
   lcurve.Write("lcurve");
   kcurve.Write("kcurve");
   f->Write();
