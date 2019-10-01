@@ -440,6 +440,8 @@ public:
 
     std::pair<double, double> CurrentRange;
 
+    std::vector<std::pair<double, double>> CurrentRangeSplit;
+
     std::pair<int, double> NominalFlux;
 
     std::string HConfigs;
@@ -467,6 +469,7 @@ public:
     p.NominalOffAxisRangesDescriptor = "-1.45_37.55:0.1";
     p.ExpDecayRate = 3;
     p.CurrentRange = {0, 350};
+    p.CurrentRangeSplit = {};
     p.NominalFlux = {4, 293};
     p.HConfigs = "1,2,3,4,5";
     p.coeffMagLower = 0.0;
@@ -617,12 +620,26 @@ public:
       std::unique_ptr<TH3> Flux3D(static_cast<TH3 *>(NDFluxes[Hist3D_it]->Clone()));
       Flux3D->SetDirectory(nullptr);
 
-      int lowCurrentBin = Flux3D->GetZaxis()->FindFixBin( fParams.CurrentRange.first );
+      int lowCurrentBin;
+      if ( fParams.CurrentRangeSplit.size() ) {
+	std::cout << "Using split currents : " << std::endl;
+	std::cout << "Hist " << Hist3D_it + 1 << " with " << fParams.CurrentRangeSplit[Hist3D_it].first << "," << fParams.CurrentRangeSplit[Hist3D_it].second << std::endl;
+        lowCurrentBin = Flux3D->GetZaxis()->FindFixBin( fParams.CurrentRangeSplit[Hist3D_it].first );
+      } else {
+        lowCurrentBin = Flux3D->GetZaxis()->FindFixBin( fParams.CurrentRange.first );
+      }
       if ( lowCurrentBin == 0 ) {
 	lowCurrentBin = 1; // If below bin range, set to minimum non-underflow bin
       }
+
       int NominalZbin = Flux3D->GetZaxis()->FindFixBin( fParams.NominalFlux.second );
-      int highCurrentBin = Flux3D->GetZaxis()->FindFixBin( fParams.CurrentRange.second );
+
+      int highCurrentBin;
+      if ( fParams.CurrentRangeSplit.size() ) {
+        highCurrentBin = Flux3D->GetZaxis()->FindFixBin( fParams.CurrentRangeSplit[Hist3D_it].second );
+      } else {
+        highCurrentBin = Flux3D->GetZaxis()->FindFixBin( fParams.CurrentRange.second );
+      }
       if ( highCurrentBin == (Flux3D->GetZaxis()->GetNbins() + 1) ) {
 	highCurrentBin = Flux3D->GetZaxis()->GetNbins(); // If above bin range, set to maximum non-overflow bin
       }
@@ -1472,13 +1489,25 @@ public:
 ////////////////////////////////////////////
    // OscillateFlux here ? Maybe hijack other function
 ///////////////////////////////////////////
+//
 
-       int lowCurrBin = FluxWeightHist->GetYaxis()->FindFixBin( fParams.CurrentRange.first );
+       int lowCurrBin;
+       if ( fParams.CurrentRangeSplit.size() ) {
+         lowCurrBin = FluxWeightHist->GetYaxis()->FindFixBin( fParams.CurrentRangeSplit[hist_it].first );
+       } else {
+         lowCurrBin = FluxWeightHist->GetYaxis()->FindFixBin( fParams.CurrentRange.first );
+       }
        if ( lowCurrBin == 0 ) {
 	 lowCurrBin = 1; // If below bin range, set to minimum non-underflow bin
        }
        int nomCurrBin = FluxWeightHist->GetYaxis()->FindFixBin( fParams.NominalFlux.second );
-       int highCurrBin = FluxWeightHist->GetYaxis()->FindFixBin( fParams.CurrentRange.second );
+
+       int highCurrBin;
+       if ( fParams.CurrentRangeSplit.size() ) {
+         highCurrBin = FluxWeightHist->GetYaxis()->FindFixBin( fParams.CurrentRangeSplit[hist_it].second );
+       } else {
+         highCurrBin = FluxWeightHist->GetYaxis()->FindFixBin( fParams.CurrentRange.second );
+       }
        if ( highCurrBin == (FluxWeightHist->GetYaxis()->GetNbins() + 1) ) {
  	 highCurrBin -= 1; // If above bin range, set to maximum non-overflow bin
        }

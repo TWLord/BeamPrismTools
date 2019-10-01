@@ -21,6 +21,8 @@ double OutOfRangeChi2Factor = 0.1;
 double BCRegFactor = 1E-2;
 double FitRangeLow = 0.5, FitRangeHigh = 10.0;
 double CurrentRangeLow = 75, CurrentRangeHigh = 350;
+std::vector<std::pair<double, double>> CurrentRangesplit;
+// std::vector<std::pair<double, double>> CurrentRangesplit = {};
 double coeffMagLimit = 0;
 int leastNCoeffs= 0;
 double NominalCurrent = 293; 
@@ -33,8 +35,9 @@ void SayUsage(char const *argv[]) {
                "-o Output.root -M <1:SVD, 2:QR, 3:Normal, 4:Inverse, 5:COD, 6:ConjugateGradient, 7:LeastSquaresConjugateGradient, 8: BiCGSTAB, 9: BiCGSTAB w/ last sol'n guess> -MX "
                "<NEnuBinMerge> -OR OutOfRangeChi2Factor -RF BeamConfigsRegFactor "
                "-CML <CoeffMagLowerBound> -CNL <CoefficientNumberLimit> "
-	       "-B <ConfTree,ConfBranches> -Nom <NominalHist(number), NominalCurrent> "
-	       "-FR <FitRangeLow, FitRangeHigh> -CR <CurrentRangeLow, CurrentRangeHigh "
+	       "-B <ConfTree,ConfBranches> -Nom <NominalHist(number),NominalCurrent> "
+	       "-FR <FitRangeLow, FitRangeHigh> -CR <CurrentRangeLow,CurrentRangeHigh> "
+	       "-CRsplit <CR1Low,CR1High:CR2Low,CR2High:> "
 	       "-OA <OffAxisLow_OffAxisHigh:BinWidth,....,OffAxisLow_OffAxisHigh:BinWidth> ]"
 	       "-NOA <NOALow_NOAHigh:BinWidth,....,NOALow_NOAHigh:BinWidth> ]"
             << std::endl;
@@ -114,7 +117,7 @@ void handleOpts(int argc, char const *argv[]) {
           ParseToVect<std::string>(argv[++opt], ",");
       if (params.size() != 2) {
         std::cout << "[ERROR]: Recieved " << params.size()
-                  << " entrys for -i, expected 2." << std::endl;
+                  << " entrys for -FR, expected 2." << std::endl;
         exit(1);
       }
       FitRangeLow = str2T<double>(params[0]);
@@ -124,11 +127,26 @@ void handleOpts(int argc, char const *argv[]) {
           ParseToVect<std::string>(argv[++opt], ",");
       if (params.size() != 2) {
         std::cout << "[ERROR]: Recieved " << params.size()
-                  << " entrys for -i, expected 2." << std::endl;
+                  << " entrys for -CR, expected 2." << std::endl;
         exit(1);
       }
       CurrentRangeLow = str2T<double>(params[0]);
       CurrentRangeHigh = str2T<double>(params[1]);
+    } else if (std::string(argv[opt]) == "-CRS") {
+      std::vector<std::string> params =
+          ParseToVect<std::string>(argv[++opt], ":");
+      // for (size_t v_it = 0; v_it < params.size(); v_it++) {
+	// ParseToVect<std::string>(params[v_it], ",");
+      for (std::string v : params) {
+	std::vector<std::string> sub_vect = ParseToVect<std::string>(v, ",");
+	if (sub_vect.size() != 2) {
+          std::cout << "[ERROR]: Recieved " << sub_vect.size()
+                    << " entrys for an element in -CRS, expected 2." << std::endl;
+          exit(1);
+	}
+	std::pair<double, double> sub_pair = { str2T<double>(sub_vect[0]), str2T<double>(sub_vect[1]) };
+        CurrentRangesplit.emplace_back(sub_pair);
+      }
     } else if (std::string(argv[opt]) == "-Nom") {
       std::vector<std::string> params =
           ParseToVect<std::string>(argv[++opt], ",");
@@ -225,6 +243,7 @@ int main(int argc, char const *argv[]) {
   p.ExpDecayRate = 3;
 
   p.CurrentRange = {CurrentRangeLow, CurrentRangeHigh};
+  p.CurrentRangeSplit = CurrentRangesplit;
   p.NominalFlux = {NominalHist, NominalCurrent};
 
   // Chi2 factor out of fit range
