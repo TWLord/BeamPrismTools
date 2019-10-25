@@ -1,6 +1,14 @@
 #include "FluxLinearSolver_Standalone.hxx"
 
 #include "TGraph.h"
+// extra stuff for plotting
+#include "TFile.h"
+#include "TH1.h"
+#include "TH2.h"
+#include "TH3.h"
+#include "TTreeReader.h"
+#include "TTreeReaderValue.h"
+#include "TLine.h"
 
 std::string OutputFile = "FluxLinearSolver.root";
 
@@ -18,10 +26,12 @@ int weightmethod = 1;
 size_t nsteps = 20;
 
 double OutOfRangeChi2Factor = 0.1;
-double BCRegFactor = 1E-2;
+double BCRegFactor = 1;
+double CSNorm = -8;
+double StabilityFactor = -3;
 double FitRangeLow = 0.5, FitRangeHigh = 10.0;
 double CurrentRangeLow = 75, CurrentRangeHigh = 350;
-std::vector<std::pair<double, double>> CurrentRangesplit;
+std::vector<std::vector<std::pair<double, double>>> CurrentRangesplit;
 // std::vector<std::pair<double, double>> CurrentRangesplit = {};
 double coeffMagLimit = 0;
 int leastNCoeffs= 0;
@@ -135,16 +145,19 @@ void handleOpts(int argc, char const *argv[]) {
     } else if (std::string(argv[opt]) == "-CRS") {
       std::vector<std::string> params =
           ParseToVect<std::string>(argv[++opt], ":");
-      // for (size_t v_it = 0; v_it < params.size(); v_it++) {
-	// ParseToVect<std::string>(params[v_it], ",");
-      for (std::string v : params) {
-	std::vector<std::string> sub_vect = ParseToVect<std::string>(v, ",");
-	if (sub_vect.size() != 2) {
-          std::cout << "[ERROR]: Recieved " << sub_vect.size()
-                    << " entrys for an element in -CRS, expected 2." << std::endl;
-          exit(1);
+      for (std::string v1 : params) {
+	std::vector<std::string> sub_vect = ParseToVect<std::string>(v1, ",");
+	std::vector<std::pair<double, double>> sub_pair;
+        for (std::string v2 : sub_vect) {
+	  std::vector<std::string> subsub_vect = ParseToVect<std::string>(v2, "_");
+	  if (subsub_vect.size() != 2) {
+            std::cout << "[ERROR]: Recieved " << subsub_vect.size()
+                      << " entrys for an element in -CRS, expected 2." << std::endl;
+            exit(1);
+	  }
+	  std::pair<double, double> subsub_pair = { str2T<double>(subsub_vect[0]), str2T<double>(subsub_vect[1]) };
+	  sub_pair.emplace_back(subsub_pair);
 	}
-	std::pair<double, double> sub_pair = { str2T<double>(sub_vect[0]), str2T<double>(sub_vect[1]) };
         CurrentRangesplit.emplace_back(sub_pair);
       }
     } else if (std::string(argv[opt]) == "-Nom") {
@@ -185,6 +198,10 @@ void handleOpts(int argc, char const *argv[]) {
       nsteps = str2T<int>(argv[++opt]);
     } else if (std::string(argv[opt]) == "-RF") {
       BCRegFactor = str2T<double>(argv[++opt]);
+    } else if (std::string(argv[opt]) == "-SF") {
+      StabilityFactor = str2T<double>(argv[++opt]);
+    } else if (std::string(argv[opt]) == "-CSnorm") {
+      CSNorm = str2T<double>(argv[++opt]);
     } else if ((std::string(argv[opt]) == "-?") ||
                (std::string(argv[opt]) == "--help")) {
       SayUsage(argv);
@@ -267,7 +284,8 @@ int main(int argc, char const *argv[]) {
   p.WeightMethod = FluxLinearSolver::Params::Weighting(weightmethod);
   //p.OffAxisRangesDescriptor = "-1.45_32.45:0.1,37.45_37.55:0.1";
 
-  fls.Initialize(p, {NDFile, NDHists}, {FDFile, FDHist}, {BCTree, BCBranches}, true);
+  int ncoeffs = 0;
+  fls.Initialize(p, ncoeffs, {NDFile, NDHists}, {FDFile, FDHist}, {BCTree, BCBranches}, true);
 
   // std::array<double, 6> OscParameters{0.297,   0.0214,   0.534,
   //                                     7.37E-5, 2.539E-3, 0};
@@ -279,54 +297,154 @@ int main(int argc, char const *argv[]) {
 
   // size_t nsteps = 20;
   // double start = -18;
-  double start = -10;
-  double end = -7;
-  // double end = -2;
-  TGraph lcurve(nsteps);
-  TGraph kcurve(nsteps - 8);
-  double step = double(end - start) / double(nsteps);
+  
+  bool CSSolve = true;
+  if (CSSolve) {
 
-  std::vector<double> eta_hat, rho_hat;
-  for (size_t l_it = 0; l_it < nsteps; ++l_it) {
-    std::cout << "\n\n ------ Step : " << l_it << " ------ " << std::endl;
-    double reg_exp = start + double(l_it) * step;
-    // Passed parameter is regularization factor, should scan for the best one,
+    // looking at coeff removal below coefflim size
+    double coefflim = 1E-9;
+    TGraph coeffs(nsteps);
+    std::cout << "ncoeffs : " << ncoeffs << std::endl;
+    TH2D *CoeffChange =
+       new TH2D("CoeffChange2D", "Coeff Change with steps", ncoeffs, 0, ncoeffs, nsteps+1, 0, nsteps+1);
+    TH2D *WeightChange =
+       new TH2D("WeightChange2D", "Weighting Change with steps", ncoeffs, 0, ncoeffs, nsteps+1, 0, nsteps+1);
+
+    TGraph lcurve(nsteps);
+    // double reg_exp = -9;
+    double reg_exp = BCRegFactor;
+    std::vector<double> omega;
     double soln_norm, res_norm;
-    fls.Solve(pow(10, reg_exp), BCRegFactor, res_norm, soln_norm);
-    std::cout << "soln_norm : " << soln_norm << std::endl;
-    std::cout << "res_norm : " << res_norm << std::endl;
-    eta_hat.push_back(log(soln_norm));
-    rho_hat.push_back(log(res_norm));
 
-    lcurve.SetPoint(l_it, rho_hat.back() / 2.0, eta_hat.back() / 2.0);
-  }
+    std::vector<double> eta_hat, rho_hat;
+    for (size_t l_it = 0; l_it < nsteps; ++l_it) {
 
-  double max_curv = -std::numeric_limits<double>::max();
-  double best_reg;
-  for (size_t l_it = 4; l_it < (nsteps - 4); ++l_it) {
+      /*for (int i = 0; i < omega.size(); i++) {
+        // std::cout << omega[i] << std::endl;
+	WeightChange->SetBinContent( i+1, l_it+1, omega[i]);
+      }*/
 
-    double curv =
-        2.0 *
-        (deriv(&rho_hat[l_it], step) * second_deriv(&eta_hat[l_it], step) -
-         deriv(&eta_hat[l_it], step) * second_deriv(&rho_hat[l_it], step)) /
-        pow(pow(deriv(&rho_hat[l_it], step), 2) +
-                pow(deriv(&eta_hat[l_it], step), 2),
-            3 / 2);
+      fls.CompressedSensingSolve(pow(10, reg_exp), omega, res_norm, soln_norm);
+      std::cout << "soln_norm : " << soln_norm << std::endl;
+      std::cout << "res_norm : " << res_norm << std::endl;
+      eta_hat.push_back(log(soln_norm));
+      rho_hat.push_back(log(res_norm));
 
-    kcurve.SetPoint(l_it - 4, start + double(l_it) * step, curv);
+      lcurve.SetPoint(l_it, rho_hat.back() / 2.0, eta_hat.back() / 2.0);
 
-    if (curv > max_curv) {
-      max_curv = curv;
-      best_reg = pow(10, start + double(l_it) * step);
+      // std::cout << "\n --------------- Solve Coeffs --------------- " << std::endl;
+      double largecoeffs = 0;
+      double coeffsum = 0;
+
+      for (int i = 0; i < omega.size(); i++) {
+        // std::cout << omega[i] << std::endl;
+	CoeffChange->SetBinContent( i+1, l_it+1, omega[i]);
+	if (omega[i] > coefflim) {
+	  largecoeffs+=1;
+	  coeffsum += omega[i];
+	}
+      }
+      coeffs.SetPoint(l_it, coeffsum, largecoeffs ); 
+
+      int w_it = 0;
+      if ( l_it != (nsteps - 1) ) { // Skip last reweight to do filtering
+        for (double &weight : omega) {
+          weight = std::abs( pow(10, CSNorm) /((pow(10,-CSNorm)*weight) + pow(10,StabilityFactor)) );
+          // weight = std::abs( pow(10, reg_exp) /((pow(10,-reg_exp)*weight) + pow(10,StabilityFactor)) );
+	  WeightChange->SetBinContent( w_it+1, l_it+1, weight);
+	  w_it++;
+        }
+      }
     }
+
+    TFile *f = CheckOpenFile(OutputFile, "RECREATE");
+    fls.WriteCS(f, res_norm, soln_norm);
+
+    // This step is to filter coefficient results
+    // possibly find largest coeff discontinuity and set this as upper lim?
+    int w_it = 0; // need to do this in header file function to access nominal flux indexing
+    // or to turn off coeffs by removing columns like in removencoeffs funcs? 
+    for (double &weight : omega) {
+      if ( std::abs (weight) >= coefflim ) {
+        weight = std::abs( pow(10, CSNorm) /((pow(10,-CSNorm)*weight) + pow(10,StabilityFactor)) );
+      }
+      else {
+	weight = 1/(pow(10,1E-100));
+      }
+      WeightChange->SetBinContent( w_it+1, nsteps+1, weight);
+      w_it++;
+    }
+
+    fls.CompressedSensingSolveLast(pow(10, reg_exp), omega, res_norm, soln_norm, pow(10, CSNorm), pow(10, StabilityFactor));
+
+    w_it = 0;
+    for (double &weight : omega) {
+      CoeffChange->SetBinContent( w_it+1, nsteps+1, weight);
+      weight = std::abs( pow(10, CSNorm) /((pow(10,-CSNorm)*weight) + pow(10,StabilityFactor)) );
+      WeightChange->SetBinContent( w_it+1, nsteps+1, weight);
+      w_it++;
+    }
+
+    // TFile *f = CheckOpenFile(OutputFile, "RECREATE");
+    fls.Write(f, res_norm, soln_norm);
+    lcurve.Write("CS_lcurve");
+    coeffs.Write("coeffchange");
+    CoeffChange->Write();
+    WeightChange->Write();
+    // kcurve.Write("kcurve");
+    f->Write();
+
+  } else {
+
+    double start = -10;
+    double end = -7;
+    // double end = -2;
+    TGraph lcurve(nsteps);
+    TGraph kcurve(nsteps - 8);
+    double step = double(end - start) / double(nsteps);
+
+    std::vector<double> eta_hat, rho_hat;
+    for (size_t l_it = 0; l_it < nsteps; ++l_it) {
+      std::cout << "\n\n ------ Step : " << l_it << " ------ " << std::endl;
+      double reg_exp = start + double(l_it) * step;
+      // Passed parameter is regularization factor, should scan for the best one,
+      double soln_norm, res_norm;
+      fls.Solve(pow(10, reg_exp), BCRegFactor, res_norm, soln_norm);
+      std::cout << "soln_norm : " << soln_norm << std::endl;
+      std::cout << "res_norm : " << res_norm << std::endl;
+      eta_hat.push_back(log(soln_norm));
+      rho_hat.push_back(log(res_norm));
+
+      lcurve.SetPoint(l_it, rho_hat.back() / 2.0, eta_hat.back() / 2.0);
+    }
+
+    double max_curv = -std::numeric_limits<double>::max();
+    double best_reg;
+    for (size_t l_it = 4; l_it < (nsteps - 4); ++l_it) {
+
+      double curv =
+          2.0 *
+          (deriv(&rho_hat[l_it], step) * second_deriv(&eta_hat[l_it], step) -
+           deriv(&eta_hat[l_it], step) * second_deriv(&rho_hat[l_it], step)) /
+          pow(pow(deriv(&rho_hat[l_it], step), 2) +
+                  pow(deriv(&eta_hat[l_it], step), 2),
+              3 / 2);
+
+      kcurve.SetPoint(l_it - 4, start + double(l_it) * step, curv);
+
+      if (curv > max_curv) {
+        max_curv = curv;
+        best_reg = pow(10, start + double(l_it) * step);
+      }
+    }
+
+    double soln_norm=0, res_norm=0;
+    fls.SolveLast(best_reg, BCRegFactor, res_norm, soln_norm);
+
+    TFile *f = CheckOpenFile(OutputFile, "RECREATE");
+    fls.Write(f, res_norm, soln_norm);
+    lcurve.Write("lcurve");
+    kcurve.Write("kcurve");
+    f->Write();
   }
-
-  double soln_norm=0, res_norm=0;
-  fls.SolveLast(best_reg, BCRegFactor, res_norm, soln_norm);
-
-  TFile *f = CheckOpenFile(OutputFile, "RECREATE");
-  fls.Write(f, res_norm, soln_norm);
-  lcurve.Write("lcurve");
-  kcurve.Write("kcurve");
-  f->Write();
 }
