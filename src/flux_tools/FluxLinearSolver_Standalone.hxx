@@ -387,6 +387,10 @@ inline void FillHistFromEigenVector(TH1 *rh, Eigen::VectorXd const &vals,
   exit(1);
 }
 
+bool compareR(const pair<double, int> &i, const pair <double, int> &j) {
+	return std::abs(i.first) > std::abs(j.first);
+}
+
 // ****************** End helper methods
 
 class FluxLinearSolver {
@@ -452,6 +456,10 @@ public:
 
     Weighting WeightMethod;
 
+    bool startCSequalreg;
+
+    bool OrthogSolve;
+
   };
   Params fParams;
 
@@ -476,6 +484,8 @@ public:
     p.LeastNCoeffs= 0;
     p.WFile = "";
     p.WeightMethod = Params::TotalFlux;
+    p.startCSequalreg = false;
+    p.OrthogSolve = false;
 
     return p;
   }
@@ -509,7 +519,8 @@ public:
   std::vector<size_t> nZbins;
   std::vector<std::vector<size_t>> AllZbins;
   std::vector<std::vector<size_t>> AllOAbins;
-  std::vector<Int_t> OAbinsperhist;
+  std::vector<int> OAbinsperhist;
+  std::vector<std::vector<double>> zCenter;
   size_t NomRegFluxFirst = 0, NomRegFluxLast = 0;
   size_t low_offset, FitIdxLow, FitIdxHigh;
   std::vector<bool> UseFluxesOld; 
@@ -652,6 +663,13 @@ public:
       int zBins = HistZbins.size(); 
       nZbins.emplace_back(zBins);
       std::vector<size_t> nOAbins;
+
+      std::vector<double> tmpv;
+      // for (int zh_it = 0; zh_it < AllZbins.size(); zh_it++) {
+      for (size_t zbi_it : HistZbins) {
+	tmpv.emplace_back(Flux3D->GetZaxis()->GetBinCenter(zbi_it)); 
+      }
+      zCenter.emplace_back(tmpv);
       
 /*
       int lowCurrentBin;
@@ -1141,7 +1159,7 @@ public:
        FluxMatrix_Solve.bottomRows(NFluxes) = (FluxMatrix_Solve.bottomRows(NFluxes) * FDWeights).eval();
        FluxMatrix_Reduced = FluxMatrix_Solve;
      }
-     else {
+     else if ( ! fParams.OrthogSolve ) {
        FluxMatrix_Reduced = FluxMatrix_Solve;
      }
    }
@@ -1480,7 +1498,11 @@ public:
      std::cout << "NFluxes : " << NFluxes << std::endl;
 
      if (omega.size() == 0) {
-       omega.assign(NFluxes, 1);
+       if ( fParams.startCSequalreg ) {
+         omega.assign(NFluxes, reg_param);
+       } else {
+         omega.assign(NFluxes, 1);
+       }
      }
 
      if (!NExtraFluxes) {
@@ -1974,6 +1996,147 @@ public:
    // std::cout << FDWeights.format(CleanFmt) << std::endl;
   }
 
+  void doGS(TDirectory *f) {
+    size_t NFluxes = FluxMatrix_Solve.cols();
+    size_t NEqs = FluxMatrix_Solve.rows();
+    size_t NBins = NEqs - NFluxes;
+    size_t NNomFluxes = (1 + NomRegFluxLast - NomRegFluxFirst);
+    size_t NExtraFluxes = NFluxes - NNomFluxes; 
+
+    // orthogonaliseNominal();
+    Eigen::MatrixXd NominalFlux = FluxMatrix_Solve.block(0, NomRegFluxFirst - 1, NBins, NNomFluxes);
+
+    // Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
+    // std::cout << NominalFlux.format(CleanFmt) << std::endl;
+    // std::cout << "NominalFlux().rows() : " << NominalFlux.rows() << std::endl;
+    
+    // Eigen::HouseholderQR<Eigen::MatrixXd> qr = NominalFlux.householderQr();
+    // Eigen::MatrixXd nomQ = qr.householderQ();
+    // Eigen::MatrixXd nomR = qr.matrixQR().triangularView<Eigen::Upper>();
+    // std::cout << nomQ.format(CleanFmt) << std::endl;
+    // std::cout << "nomQ().rows() : " << nomQ.rows() << std::endl;
+    // std::cout << nomR.format(CleanFmt) << std::endl;
+
+    // call orthogonaliseFlux here to return N largest orthogonal fluxes wrt nominal
+    std::vector<std::pair<double, int>> LargestFluxes = orthogonaliseFlux( NominalFlux, 10); 
+
+    // get current bin center and OA bin number for each flux 
+    std::cout << " Nominal + 1 " << std::endl;
+    for ( auto flux : LargestFluxes ) {
+      GetFluxCurrAndOA( flux );
+    }
+
+    TString suffnom = "plus1_";
+    WriteOrthogs(f, LargestFluxes, suffnom);
+
+    Eigen::MatrixXd ExpandedFlux(NBins, NNomFluxes+1); 
+    ExpandedFlux.block(0,0,NBins, NNomFluxes) = NominalFlux; 
+    int it_two = 0;
+    for (auto flux : LargestFluxes ) {
+      it_two++;
+      int col = flux.second;
+      ExpandedFlux.block(0, NNomFluxes, NBins, 1) = FluxMatrix_Solve.block(0, col, NBins, 1);
+      std::vector<std::pair<double, int>> Added2Fluxes = orthogonaliseFlux( ExpandedFlux, 5); 
+    std::cout << " Nominal + 2 " << std::endl;
+      for ( auto f2 : Added2Fluxes ) {
+        GetFluxCurrAndOA( f2 );
+      }
+      TString Suffix = TString::Format("plus2_%i_", it_two);
+      WriteOrthogs(f, Added2Fluxes, Suffix );
+    }
+
+    // Eigen::MatrixXd nomQ = NominalFlux.householderQr().householderQ();
+    // nomR.template triangularView<Eigen::Upper>() = qr.matrixQR().template triangularView<Eigen::Upper>();
+
+    // WriteOrthogs(f, Added2Fluxes);
+
+  }
+   
+ std::vector<std::pair<double, int>> orthogonaliseFlux( Eigen::MatrixXd NomFlux, int nCompare ) {
+    size_t NFluxes = FluxMatrix_Solve.cols();
+    size_t NEqs = FluxMatrix_Solve.rows();
+    size_t NBins = NomFlux.rows(); 
+    size_t NNomFluxes = NomFlux.cols(); 
+    size_t NExtraFluxes = NFluxes - NNomFluxes; 
+
+    Eigen::MatrixXd ExpandedFlux(NBins, NNomFluxes+1); 
+    ExpandedFlux.block(0,0,NBins, NNomFluxes) = NomFlux; 
+
+    std::vector<std::pair<double, int>> LargestFluxes(nCompare, {0,0} ); 
+    // for (int col_it = 0; col_it < (NomRegFluxFirst - 1); ++col_it) {
+    // }
+    // for (int col_it = (NomRegFluxLast-1); col_it < NFluxes; ++col_it) {
+    // }
+    for (int col_it = 0; col_it < NFluxes; ++col_it) {
+      // Add each extra flux as an extra column
+      ExpandedFlux.block(0, NNomFluxes, NBins, 1) = FluxMatrix_Solve.block(0, col_it, NBins, 1);
+      // Get new Q and R
+      Eigen::HouseholderQR<Eigen::MatrixXd> qrexp = ExpandedFlux.householderQr();
+      Eigen::MatrixXd newQ = qrexp.householderQ();
+      Eigen::MatrixXd newR = qrexp.matrixQR().triangularView<Eigen::Upper>();
+
+      // Get magnitude of orthogonalised vector in new dir only 
+      // - this is the (n,n)'th elem in R -
+      // and store if in largest N
+      if ( std::abs(newR(NNomFluxes, NNomFluxes)) >= std::abs(LargestFluxes.back().first) ) {
+	LargestFluxes.pop_back();
+	LargestFluxes.emplace_back( std::make_pair(newR(NNomFluxes, NNomFluxes), col_it) );
+      }
+      std::sort(LargestFluxes.begin(), LargestFluxes.end(), compareR); 
+    }
+
+    return LargestFluxes;
+  }
+
+  std::pair<double, int> GetFluxCurrAndOA( std::pair<double, int> flux ) {
+    // for (auto flux : LargestFluxes ) {
+
+      int col = flux.second;
+      int OA_it1 = 0;
+      while ( col >= 0 ) {
+	col -= OAbinsperhist[OA_it1]; 
+	OA_it1++;
+      }
+      OA_it1--;
+      col += OAbinsperhist[OA_it1]; 
+
+      int OA_it2 = 0;
+      while ( col >= 0 ) {
+	col -= AllOAbins[OA_it1][OA_it2]; 
+	OA_it2++;
+      }
+      OA_it2--;
+      col += AllOAbins[OA_it1][OA_it2]; 
+
+      std::cout << "Current center : " << zCenter[OA_it1][OA_it2] << std::endl;
+      std::cout << "OA bin  	   : " << col+1 << std::endl;
+      std::cout << "Weight 	   : " << flux.first << std::endl;
+    // }
+      return make_pair(zCenter[OA_it1][OA_it2],col+1);
+  }
+
+  void WriteOrthogs(TDirectory *td, std::vector<std::pair<double, int>> OrthogFluxes, TString suffix ) {
+    size_t NFluxes = FluxMatrix_Solve.cols();
+    size_t NEqs = FluxMatrix_Solve.rows();
+    size_t NBins = NEqs - NFluxes;
+
+    int fCounter = 0;
+    for ( auto flux : OrthogFluxes ) {
+      fCounter++;
+      TString tmp = "OrthogFlux" + suffix;
+      TString nthFluxName = TString::Format(tmp+"%i", fCounter);
+      TH1 *OrthoFlux = static_cast<TH1 *>(FDFlux_osc->Clone(nthFluxName));
+      OrthoFlux->Reset();
+
+      // Eigen::VectorXd FluxVector = FluxMatrix_Solve.col(flux.second).transpose();
+      Eigen::VectorXd FluxVector = FluxMatrix_Solve.col(flux.second).transpose().head(NBins);
+      // Eigen::VectorXd FluxVector = FluxMatrix_Solve.block(0, flux.second, NBins, 1).transpose();
+      FillHistFromEigenVector(OrthoFlux, FluxVector);
+
+      OrthoFlux->SetDirectory(td);
+      OrthoFlux->Write();
+    }
+  }
 
   // void Store(TDirectory *td, double res_norm = 0, double soln_norm = 0) {
 

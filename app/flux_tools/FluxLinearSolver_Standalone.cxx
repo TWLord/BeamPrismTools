@@ -283,6 +283,10 @@ int main(int argc, char const *argv[]) {
   p.WFile = WFile;
   p.WeightMethod = FluxLinearSolver::Params::Weighting(weightmethod);
   //p.OffAxisRangesDescriptor = "-1.45_32.45:0.1,37.45_37.55:0.1";
+ 
+  // For CSSolve, sets starting reg factor for iterative CS solver equal to nominal reg factor 
+  p.startCSequalreg = true;
+  p.OrthogSolve = false;
 
   int ncoeffs = 0;
   fls.Initialize(p, ncoeffs, {NDFile, NDHists}, {FDFile, FDHist}, {BCTree, BCBranches}, true);
@@ -298,7 +302,32 @@ int main(int argc, char const *argv[]) {
   // size_t nsteps = 20;
   // double start = -18;
   
-  bool CSSolve = true;
+  bool CSSolve = false;
+  bool CNLSolve = true;
+  bool OrthogGS = false;
+  // bool OrthogSolve = false;
+
+  if (OrthogGS) {
+    std::string GSFile = OutputFile.substr(0, OutputFile.size()-5)+"_ortho.root";
+    TFile *orthof = CheckOpenFile(GSFile, "RECREATE");
+    // fls.WriteOrthogs(f);
+    fls.doGS(orthof);
+    orthof->Write();
+  }
+
+  if (p.OrthogSolve) {
+    // write function that runs solve for nominal input fluxes,
+    // sorts based on QR orthog projection, then re-calls solve.. 
+    // but can also solve for nominal + additional fluxes.. 
+    // use flux_reduced architecture in header file, there is now a param,
+    // OrthogSolve which, if set, doesn't change FluxMatrix_Solve.. 
+    // However you will need to re-set regularisation manually. :/   
+    //
+    // then can call function to project all fluxes in fluxmatrix_solve
+    // onto residual vector, (bf - target). This is just dot product of
+    // each flux (col) with residual / residual dot residual ( * residual? )
+  }
+
   if (CSSolve) {
 
     // looking at coeff removal below coefflim size
@@ -394,7 +423,7 @@ int main(int argc, char const *argv[]) {
     // kcurve.Write("kcurve");
     f->Write();
 
-  } else {
+  } else if (CNLSolve) {
 
     double start = -10;
     double end = -7;
