@@ -529,11 +529,12 @@ public:
 
   void
   Initialize(Params const &p,
-	     int &ncoeffs,
              std::pair<std::string, std::string> NDFluxDescriptor = {"", ""},
              std::pair<std::string, std::string> FDFluxDescriptor = {"", ""},
              std::pair<std::string, std::string> NDBeamConfDescriptor = {"", ""},
              bool FDIsOsc = false) {
+
+    int ncoeffs = 1;
 
     std::pair<std::string, std::vector<std::string>> vectNDFluxDescriptor;
     vectNDFluxDescriptor.first = NDFluxDescriptor.first;
@@ -647,9 +648,9 @@ public:
 
       std::vector<std::pair<double, double>> HistCurrents = fParams.CurrentRangeSplit[Hist3D_it];
       std::vector<size_t> HistZbins;
-      for (size_t zbi_it = 1; zbi_it <= Flux3D->GetZaxis()->GetNbins(); zbi_it++) {
+      for (int zbi_it = 1; zbi_it <= Flux3D->GetZaxis()->GetNbins(); zbi_it++) {
         // if high edge is higher than first val and low edge is lower than second val
-        for (int ranges_it = 0; ranges_it < HistCurrents.size(); ranges_it++) {
+        for (size_t ranges_it = 0; ranges_it < HistCurrents.size(); ranges_it++) {
           if ( Flux3D->GetZaxis()->GetBinUpEdge(zbi_it) > HistCurrents[ranges_it].first &&
 		 Flux3D->GetZaxis()->GetBinLowEdge(zbi_it) < HistCurrents[ranges_it].second ) {
 	    HistZbins.emplace_back(zbi_it);
@@ -1188,6 +1189,72 @@ public:
     // Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
     // std::cout << FluxMatrix_Reduced.format(CleanFmt) << std::endl;
 
+    runSolver(reg_param, res_norm, soln_norm);
+
+    std::cout << "\n ------ LOOPING VALS ------ " << std::endl;
+    std::cout << " res_norm = " << res_norm << std::endl;
+    std::cout << " soln_norm = " << soln_norm << std::endl;
+
+    UseFluxesNew = UseFluxesOld;
+    /*for ( int sol_iter = 0; sol_iter < last_solution.rows(); sol_iter++) {
+      // std::cout << " last_solution " << sol_iter << " : " << last_solution(sol_iter) << std::endl;
+      if ( sol_iter < (NomRegFluxFirst - 1) || sol_iter > (NomRegFluxLast-1) ) {
+        if ( std::abs(last_solution(sol_iter)) < fParams.coeffMagLower ) {
+	  UseFluxesOld[sol_iter] = false; 
+        }
+      }
+    }*/
+
+    if (fParams.LeastNCoeffs) {
+	std::cout << "fParams.LeastNCoeffs : " << fParams.LeastNCoeffs << std::endl; 
+	UseFluxesOld = RemoveNCoeffs(last_solution, NFluxes);
+    }
+    else if (fParams.coeffMagLower) {
+	std::cout << "fParams.coeffMagLower : " << fParams.coeffMagLower << std::endl; 
+	UseFluxesOld = RemoveCoeffsSize(last_solution, NFluxes);
+    }
+
+    int NewEmptyFluxes = 0;
+    for ( size_t check = 0; check < UseFluxesOld.size(); check++ ) {
+      if ( !UseFluxesOld[check] ) {
+	NewEmptyFluxes++;
+      }
+    }
+    std::cout << "\n New Empty Fluxes : " << NewEmptyFluxes << std::endl;
+    loops++;
+   }
+   std::cout << "\n ------ Loops : " << loops << " ------ " << std::endl;
+   if (fParams.LeastNCoeffs && loops != 2) {
+	std::cout << "[ERROR] : Loops != 2, implies RemoveNCoeffs not working correctly" << std::endl; 
+        exit(1);
+   }
+   return last_solution;
+  }
+  Eigen::VectorXd SolveLast(double reg_param, double BC_param, double &res_norm, double &soln_norm) {
+    // double dum1, dum2;
+    std::cout << "reg_param = " << reg_param << std::endl; 
+    std::cout << "BC_param = " << BC_param << std::endl; 
+    RegParam = reg_param;
+    BCParam = BC_param;
+    CSNorm = 0;
+    StabilityFactor = 0;
+    // return Solve(reg_param, BC_param, dum1, dum2);
+    return Solve(reg_param, BC_param, res_norm, soln_norm);
+  }
+  Eigen::VectorXd Solve(double reg_param = 0, double BC_param = 1) {
+    double dum1, dum2;
+    std::cout << "reg_param = " << reg_param << std::endl; 
+    std::cout << "BC_param = " << BC_param << std::endl; 
+    return Solve(reg_param, BC_param, dum1, dum2);
+    
+  }
+
+  Eigen::VectorXd runSolver(double reg_param, double &res_norm, double &soln_norm) {
+    bool use_reg = reg_param > 0;
+    size_t NFluxes = FluxMatrix_Solve.cols();
+    size_t NEqs = FluxMatrix_Solve.rows();
+    size_t NBins = NEqs - NFluxes;
+
     switch (fParams.algo_id) {
     case Params::kSVD: {
       if (use_reg) {
@@ -1411,65 +1478,9 @@ public:
 	std::exit(EXIT_FAILURE);
     }
 
-    std::cout << "\n ------ LOOPING VALS ------ " << std::endl;
-    std::cout << " res_norm = " << res_norm << std::endl;
-    std::cout << " soln_norm = " << soln_norm << std::endl;
-
-    UseFluxesNew = UseFluxesOld;
-    /*for ( int sol_iter = 0; sol_iter < last_solution.rows(); sol_iter++) {
-      // std::cout << " last_solution " << sol_iter << " : " << last_solution(sol_iter) << std::endl;
-      if ( sol_iter < (NomRegFluxFirst - 1) || sol_iter > (NomRegFluxLast-1) ) {
-        if ( std::abs(last_solution(sol_iter)) < fParams.coeffMagLower ) {
-	  UseFluxesOld[sol_iter] = false; 
-        }
-      }
-    }*/
-
-    if (fParams.LeastNCoeffs) {
-	std::cout << "fParams.LeastNCoeffs : " << fParams.LeastNCoeffs << std::endl; 
-	UseFluxesOld = RemoveNCoeffs(last_solution, NFluxes);
-    }
-    else if (fParams.coeffMagLower) {
-	std::cout << "fParams.coeffMagLower : " << fParams.coeffMagLower << std::endl; 
-	UseFluxesOld = RemoveCoeffsSize(last_solution, NFluxes);
-    }
-
-    int NewEmptyFluxes = 0;
-    for ( size_t check = 0; check < UseFluxesOld.size(); check++ ) {
-      if ( !UseFluxesOld[check] ) {
-	NewEmptyFluxes++;
-      }
-    }
-    std::cout << "\n New Empty Fluxes : " << NewEmptyFluxes << std::endl;
-    loops++;
-   }
-   std::cout << "\n ------ Loops : " << loops << " ------ " << std::endl;
-   if (fParams.LeastNCoeffs && loops != 2) {
-	std::cout << "[ERROR] : Loops != 2, implies RemoveNCoeffs not working correctly" << std::endl; 
-        exit(1);
-   }
-   return last_solution;
-  }
-  Eigen::VectorXd SolveLast(double reg_param, double BC_param, double &res_norm, double &soln_norm) {
-    // double dum1, dum2;
-    std::cout << "reg_param = " << reg_param << std::endl; 
-    std::cout << "BC_param = " << BC_param << std::endl; 
-    RegParam = reg_param;
-    BCParam = BC_param;
-    CSNorm = 0;
-    StabilityFactor = 0;
-    // return Solve(reg_param, BC_param, dum1, dum2);
-    return Solve(reg_param, BC_param, res_norm, soln_norm);
-  }
-  Eigen::VectorXd Solve(double reg_param = 0, double BC_param = 1) {
-    double dum1, dum2;
-    std::cout << "reg_param = " << reg_param << std::endl; 
-    std::cout << "BC_param = " << BC_param << std::endl; 
-    return Solve(reg_param, BC_param, dum1, dum2);
-    
+    return last_solution;
   }
 
-  // std::vector<double> &CompressedSensingSolve(double reg_param, std::vector<double> omega, double &res_norm,
   Eigen::VectorXd const &CompressedSensingSolve(double reg_param, std::vector<double> &omega, double &res_norm,
                                double &soln_norm) {
 
@@ -1480,7 +1491,7 @@ public:
    //double NomRegFluxFirst, NomRegFluxLast;
    UseFluxesOld.assign(NFluxes,true);
    UseFluxesNew.assign(NFluxes,false);
-   int loops = 0;
+   // int loops = 0;
 
 
    // std::cout << "[INFO]: Solving with " << NBins << " energy bins." << std::endl;
@@ -1547,200 +1558,7 @@ public:
     // std::cout << FluxMatrix_Solve.format(CleanFmt) << std::endl;
     // std::cout << FluxMatrix_Solve.bottomRows(NFluxes).format(CleanFmt) << std::endl;
 
-
-   switch (fParams.algo_id) {
-   case Params::kSVD: {
-     if (use_reg) {
-       last_solution =
-           FluxMatrix_Reduced.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)
-               .solve(Target);
-     } else {
-       last_solution = FluxMatrix_Reduced.topRows(NBins)
-                           .bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)
-                           .solve(Target.topRows(NBins));
-     }
-     break;
-   }
-   case Params::kQR: {
-     if (use_reg) {
-       last_solution = FluxMatrix_Reduced.colPivHouseholderQr().solve(Target);
-     } else {
-       last_solution =
-           FluxMatrix_Reduced.topRows(NBins).colPivHouseholderQr().solve(
-               Target.topRows(NBins));
-     }
-     break;
-   }
-   case Params::kNormal: {
-     if (use_reg) {
-       last_solution = (FluxMatrix_Reduced.transpose() * FluxMatrix_Reduced)
-                           .ldlt()
-                           .solve(FluxMatrix_Reduced.transpose() * Target);
-     } else {
-       last_solution = (FluxMatrix_Reduced.transpose() * FluxMatrix_Reduced)
-                           .topRows(NBins)
-                           .ldlt()
-                           .solve(FluxMatrix_Reduced.topRows(NBins).transpose() *
-                                  Target.topRows(NBins));
-     }
-     break;
-   }
-   case Params::kInverse: {
-     if (use_reg) {
-       last_solution = ((FluxMatrix_Reduced.topRows(NBins).transpose() *
-                         FluxMatrix_Reduced.topRows(NBins)) +
-                        FluxMatrix_Reduced.bottomRows(NFluxes).transpose() *
-                            FluxMatrix_Reduced.bottomRows(NFluxes))
-                           .inverse() *
-                       FluxMatrix_Reduced.topRows(NBins).transpose() *
-                       Target.topRows(NBins);
-     } else {
-       last_solution = (FluxMatrix_Reduced.topRows(NBins).transpose() *
-                        FluxMatrix_Reduced.topRows(NBins))
-                           .inverse() *
-                       FluxMatrix_Reduced.topRows(NBins).transpose() *
-                       Target.topRows(NBins);
-     }
-     break;
-   }
-   case Params::kCOD: {
-     if (use_reg) {
-       last_solution = FluxMatrix_Reduced.completeOrthogonalDecomposition().solve(Target);
-     } else {
-       last_solution =
-           FluxMatrix_Reduced.topRows(NBins).completeOrthogonalDecomposition().solve(
-               Target.topRows(NBins));
-     }
-     break;
-   }
-   case Params::kConjugateGradient: {
-     Eigen::ConjugateGradient<Eigen::MatrixXd, Eigen::Lower|Eigen::Upper> solver;
-     std::cout << "ConjugateGradient solve" << std::endl;
-     if (use_reg) {
-       solver.compute((FluxMatrix_Reduced.topRows(NBins).transpose() *
-         	       FluxMatrix_Reduced.topRows(NBins)) +
-		       FluxMatrix_Reduced.bottomRows(NFluxes).transpose() *
-          	       FluxMatrix_Reduced.bottomRows(NFluxes));
-
-       last_solution = solver.solve(FluxMatrix_Reduced.topRows(NBins).transpose() *
-			            Target.topRows(NBins));
-       std::cout << "#iterations:     " << solver.iterations() << std::endl;
-       std::cout << "estimated error: " << solver.error()      << std::endl; 
-     } else {
-       solver.compute(FluxMatrix_Reduced.topRows(NBins).transpose() *
-	              FluxMatrix_Reduced.topRows(NBins));
-
-       last_solution = solver.solve(FluxMatrix_Reduced.topRows(NBins).transpose() *
-                       Target.topRows(NBins));
-       std::cout << "#iterations:     " << solver.iterations() << std::endl;
-       std::cout << "estimated error: " << solver.error()      << std::endl; 
-     }
-     break;
-   }
-   case Params::kLeastSquaresConjugateGradient:  {
-     Eigen::LeastSquaresConjugateGradient<Eigen::MatrixXd> solver;
-     std::cout << "LeastSquaresConjugateGradient solve" << std::endl;
-     if (use_reg) {
-       solver.compute((FluxMatrix_Reduced.topRows(NBins).transpose() *
-         	       FluxMatrix_Reduced.topRows(NBins)) +
-		       FluxMatrix_Reduced.bottomRows(NFluxes).transpose() *
-           	       FluxMatrix_Reduced.bottomRows(NFluxes));
-
-       last_solution = solver.solve(FluxMatrix_Reduced.topRows(NBins).transpose() *
-  			            Target.topRows(NBins));
-       std::cout << "#iterations:     " << solver.iterations() << std::endl;
-       std::cout << "estimated error: " << solver.error()      << std::endl; 
-     } else {
-       solver.compute(FluxMatrix_Reduced.topRows(NBins).transpose() *
-	   	      FluxMatrix_Reduced.topRows(NBins));
-
-       last_solution = solver.solve(FluxMatrix_Reduced.topRows(NBins).transpose() *
-                       Target.topRows(NBins));
-       std::cout << "#iterations:     " << solver.iterations() << std::endl;
-       std::cout << "estimated error: " << solver.error()      << std::endl; 
-     }
-     break;
-   }
-   case Params::kBiCGSTAB:  {
-     Eigen::BiCGSTAB<Eigen::MatrixXd> solver;
-     std::cout << "BiCGSTAB solve" << std::endl;
-     if (use_reg) {
-       solver.compute((FluxMatrix_Reduced.topRows(NBins).transpose() *
-          	       FluxMatrix_Reduced.topRows(NBins)) +
-		       FluxMatrix_Reduced.bottomRows(NFluxes).transpose() *
-          	       FluxMatrix_Reduced.bottomRows(NFluxes));
-
-       last_solution = solver.solve(FluxMatrix_Reduced.topRows(NBins).transpose() *
-				    Target.topRows(NBins));
-       std::cout << "#iterations:     " << solver.iterations() << std::endl;
-       std::cout << "estimated error: " << solver.error()      << std::endl; 
-     } else {
-       solver.compute(FluxMatrix_Reduced.topRows(NBins).transpose() *
-      	 	      FluxMatrix_Reduced.topRows(NBins));
-
-       last_solution = solver.solve(FluxMatrix_Reduced.topRows(NBins).transpose() *
-                       Target.topRows(NBins));
-       std::cout << "#iterations:     " << solver.iterations() << std::endl;
-       std::cout << "estimated error: " << solver.error()      << std::endl; 
-     }
-     break;
-   }
-   case Params::kBiCGSTABguess:  {
-     Eigen::BiCGSTAB<Eigen::MatrixXd> solver;
-     std::cout << "BiCGSTAB solve with guess" << std::endl;
-     if (use_reg) {
-       solver.compute((FluxMatrix_Reduced.topRows(NBins).transpose() *
-          	       FluxMatrix_Reduced.topRows(NBins)) +
-		       FluxMatrix_Reduced.bottomRows(NFluxes).transpose() *
-          	       FluxMatrix_Reduced.bottomRows(NFluxes));
-
-       last_solution = solver.solve(FluxMatrix_Reduced.topRows(NBins).transpose() *
-			       Target.topRows(NBins));
-       std::cout << "#iterations:     " << solver.iterations() << std::endl;
-       std::cout << "estimated error: " << solver.error()      << std::endl; 
-     } else {
-       solver.compute(FluxMatrix_Reduced.topRows(NBins).transpose() *
- 	 	      FluxMatrix_Reduced.topRows(NBins));
-
-       last_solution = solver.solve(FluxMatrix_Reduced.topRows(NBins).transpose() *
-                       	            Target.topRows(NBins));
-
-       std::cout << "#iterations:     " << solver.iterations() << std::endl;
-       std::cout << "estimated error: " << solver.error()      << std::endl; 
-     }
-     break;
-   }
-   }
-
-   if (!last_solution.rows()) {
-     res_norm = 0;
-     soln_norm = 0;
-     // return last_solution;
-     std::vector<double> fail{0};
-     // return fail; 
-   }
-
-   res_norm = ((FluxMatrix_Reduced.topRows(NBins) * last_solution) -
-               Target.topRows(NBins))
-                  .squaredNorm();
-   soln_norm = 0;
-   if (reg_param > 0) {
-     soln_norm =
-         (FluxMatrix_Reduced.bottomRows(NFluxes) * last_solution / reg_param)
-             .squaredNorm();
-   }
-
-   if ( isnan(res_norm) ) {
-	std::cerr << "[ERROR] : NaN res norm found. " << std::endl;
-	std::cerr << last_solution << std::endl;
-	std::exit(EXIT_FAILURE);
-   }
-
-   if ( isnan(soln_norm) ) {
-	std::cerr << "[ERROR] : NaN soln norm found. " << std::endl;
-	std::cerr << last_solution << std::endl;
-	std::exit(EXIT_FAILURE);
-   }
+   runSolver(reg_param, res_norm, soln_norm);
 
    std::cout << " res_norm = " << res_norm << std::endl;
    std::cout << " soln_norm = " << soln_norm << std::endl;
@@ -1749,7 +1567,6 @@ public:
  					last_solution.rows() * last_solution.cols());
    omega = coeffvec;
    return last_solution;
-   // return coeffvec;
   }
 
   Eigen::VectorXd CompressedSensingSolveLast(double reg_param, std::vector<double> &omega, double &res_norm, double &soln_norm, double csnorm, double stabfactor) {
@@ -1767,6 +1584,123 @@ public:
     return CompressedSensingSolve(reg_param, omega, res_norm, soln_norm);
   }
 
+  void doResidualOrthog(double reg_param, double BC_param, double &res_norm, double &soln_norm, std::string OutputFile) {
+   // bool use_reg = reg_param > 0;
+   size_t NFluxes = FluxMatrix_Solve.cols();
+   size_t NEqs = FluxMatrix_Solve.rows();
+   size_t NBins = NEqs - NFluxes;
+   // FDFlux_osc->GetXaxis()->GetNbins()
+   // size_t NNomFluxes = (1 + NomRegFluxLast - NomRegFluxFirst);
+   // size_t NExtraFluxes = NFluxes - NNomFluxes;
+
+    // std::vector<std::pair<double, int>> emptyvec;
+    // SetReducedFluxes( emptyvec );
+    SetReducedFluxes(reg_param, BC_param);
+    runSolver(reg_param, res_norm, soln_norm);
+    Eigen::VectorXd bf = (FluxMatrix_Reduced * last_solution);
+    // Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
+    /*std::cout << bf.rows() << std::endl;
+    std::cout << bf.cols() << std::endl;
+    std::cout << bf.format(CleanFmt) << std::endl;
+    std::cout << Target.rows() << std::endl;
+    std::cout << Target.cols() << std::endl;
+    std::cout << Target.head(bf.rows()).format(CleanFmt) << std::endl;*/
+
+    Eigen::VectorXd residual = bf.head(NBins) - Target.head(NBins);
+    //Eigen::MatrixXd NominalFlux = FluxMatrix_Solve.block(0, NomRegFluxFirst - 1, NBins, NNomFluxes);
+    // Want something to orthogonalise w.r.t. residual.. to do this, replace NominalFlux with column matrix of residual
+    // also want the largest IN DIRECTION of residual.. 
+    // EQUALLY can consider largest projection of flux onto residual.
+    std::vector<std::pair<double, int>> LargestProjFluxes = ProjectOntoFlux(residual, 5);
+
+    TFile *td = CheckOpenFile(OutputFile, "RECREATE");
+    int fcounter = 0;
+    for ( auto newflux : LargestProjFluxes ) {
+      // SetReducedFluxes(reg_param, BC_param, LargestProjFluxes);
+      // std::vector<auto> parsingvec = {newflux};
+      SetReducedFluxes(reg_param, BC_param, {newflux});
+      runSolver(reg_param, res_norm, soln_norm);
+      // std::pair<double, int> fluxone = GetFluxCurrAndOA(newflux);
+      TString suffix = TString::Format("%d", fcounter);
+       // replace the below with two separate functions, one for all single plots and one for iterated plot
+      WriteOrthogSolve(td, res_norm, soln_norm, bf, residual, {newflux}, suffix );
+      fcounter++;
+    }
+    td->Write();
+  }
+
+  void SetReducedFluxes(double reg_param, double BC_param, std::vector<std::pair<double, int>> NewFluxes = {{}}  ) {
+
+   size_t NFluxes = FluxMatrix_Solve.cols();
+   size_t NEqs = FluxMatrix_Solve.rows();
+   size_t NBins = NEqs - NFluxes;
+   size_t NNomFluxes = (1 + NomRegFluxLast - NomRegFluxFirst);
+   size_t NExtraFluxes = NewFluxes.size(); 
+   // std::cout << "[INFO]: Solving with " << NBins << " energy bins." << std::endl;
+   // std::cout << "[INFO]: Solving with " << NFluxes << " fluxes." << std::endl;
+   // std::cout << "[INFO]: Solving with " << NFluxes - ( 1 + NomRegFluxLast - NomRegFluxFirst ) << " extra fluxes." << std::endl;
+   size_t ReducedNFluxes = NNomFluxes + NExtraFluxes;
+   size_t ReducedNEqs = ReducedNFluxes + NBins;
+
+   // FluxMatrix_Reduced = ;
+   FluxMatrix_Reduced = Eigen::MatrixXd::Zero( ReducedNFluxes + NBins, ReducedNFluxes ); 
+   // put nominal fluxes into FluxMatrix_Reduced
+
+     for (size_t row_it = 0; row_it < (NNomFluxes-1); ++row_it) {
+       FluxMatrix_Reduced.col(row_it).head(NBins) = FluxMatrix_Solve.col((NomRegFluxFirst-1) + row_it).head(NBins);
+       FluxMatrix_Reduced(row_it + NBins, row_it) = reg_param;
+       FluxMatrix_Reduced(row_it + NBins, row_it + 1) = -reg_param;
+       // FluxMatrix_Solve(row_it + NBins, row_it) = reg_param;
+       // FluxMatrix_Solve(row_it + NBins, row_it + 1) = -reg_param;
+     }
+     FluxMatrix_Reduced.col(NNomFluxes-1).head(NBins) = FluxMatrix_Solve.col(NomRegFluxLast-1).head(NBins);
+     FluxMatrix_Reduced(ReducedNEqs - 1, ReducedNFluxes - 1) = reg_param;
+
+     // Put extra fluxes into FluxMatrix_Reduced and set reg
+     if (NExtraFluxes) {
+       for (size_t row_it = 0; row_it < NExtraFluxes; ++row_it) {
+         int fcol = NewFluxes[row_it].second; 
+         FluxMatrix_Reduced.col(row_it + NNomFluxes).head(NBins) = FluxMatrix_Solve.col(fcol).head(NBins);
+         FluxMatrix_Reduced(row_it + NBins + NNomFluxes, row_it + NNomFluxes) = reg_param*BC_param;
+       }
+     }
+
+     /*if (ApplyWeightings && fParams.WFile.size()) {
+       FluxMatrix_Solve.bottomRows(NFluxes) = (FluxMatrix_Solve.bottomRows(NFluxes) * FDWeights).eval();
+       FluxMatrix_Reduced = FluxMatrix_Solve;
+     }*/
+  }
+
+  std::vector<std::pair<double, int>> ProjectOntoFlux( Eigen::VectorXd ProjTarget, int nCompare = 1 ) {
+    // do comparison here of projection vs all non-nominal fluxes, then make std::vec of pairs as before
+    size_t NFluxes = FluxMatrix_Solve.cols();
+    size_t NEqs = FluxMatrix_Solve.rows();
+    size_t NBins = NEqs - NFluxes;
+    // size_t NNomFluxes = (1 + NomRegFluxLast - NomRegFluxFirst);
+
+    std::vector<std::pair<double, int>> LargestProjFluxes(nCompare, {0,0} ); 
+    for (size_t col_it = 0; col_it < NFluxes; ++col_it) {
+      if ( ( col_it >= (NomRegFluxFirst-1) ) && ( col_it <= (NomRegFluxLast-1) ) ) {
+	continue;
+      }
+      Eigen::VectorXd a_flux = FluxMatrix_Solve.col(col_it).head(NBins);
+
+      double projection = ProjTarget.dot(a_flux);
+
+      // Get magnitude of projected vector in new dir only 
+      // and store if in largest N
+      if ( projection >= LargestProjFluxes.back().first ) {
+	LargestProjFluxes.pop_back();
+	LargestProjFluxes.emplace_back( std::make_pair(projection, col_it) );
+      }
+      std::sort(LargestProjFluxes.begin(), LargestProjFluxes.end(), compareR); 
+    }
+    return LargestProjFluxes;
+  }
+
+ /* Eigen::VectorXd SolveReduced( ) {
+    fParams.Orthog
+  }*/
 
   std::vector<bool> RemoveNCoeffs(Eigen::VectorXd last_solution, size_t NFluxes) {
     std::vector<double> coeffVec(last_solution.data(), last_solution.data() + last_solution.rows() * last_solution.cols());
@@ -2001,7 +1935,7 @@ public:
     size_t NEqs = FluxMatrix_Solve.rows();
     size_t NBins = NEqs - NFluxes;
     size_t NNomFluxes = (1 + NomRegFluxLast - NomRegFluxFirst);
-    size_t NExtraFluxes = NFluxes - NNomFluxes; 
+    // size_t NExtraFluxes = NFluxes - NNomFluxes; 
 
     // orthogonaliseNominal();
     Eigen::MatrixXd NominalFlux = FluxMatrix_Solve.block(0, NomRegFluxFirst - 1, NBins, NNomFluxes);
@@ -2054,10 +1988,10 @@ public:
    
  std::vector<std::pair<double, int>> orthogonaliseFlux( Eigen::MatrixXd NomFlux, int nCompare ) {
     size_t NFluxes = FluxMatrix_Solve.cols();
-    size_t NEqs = FluxMatrix_Solve.rows();
+    // size_t NEqs = FluxMatrix_Solve.rows();
     size_t NBins = NomFlux.rows(); 
     size_t NNomFluxes = NomFlux.cols(); 
-    size_t NExtraFluxes = NFluxes - NNomFluxes; 
+    // size_t NExtraFluxes = NFluxes - NNomFluxes; 
 
     Eigen::MatrixXd ExpandedFlux(NBins, NNomFluxes+1); 
     ExpandedFlux.block(0,0,NBins, NNomFluxes) = NomFlux; 
@@ -2067,7 +2001,7 @@ public:
     // }
     // for (int col_it = (NomRegFluxLast-1); col_it < NFluxes; ++col_it) {
     // }
-    for (int col_it = 0; col_it < NFluxes; ++col_it) {
+    for (size_t col_it = 0; col_it < NFluxes; ++col_it) {
       // Add each extra flux as an extra column
       ExpandedFlux.block(0, NNomFluxes, NBins, 1) = FluxMatrix_Solve.block(0, col_it, NBins, 1);
       // Get new Q and R
@@ -2115,6 +2049,84 @@ public:
       return make_pair(zCenter[OA_it1][OA_it2],col+1);
   }
 
+  void WriteOrthogSolve(TDirectory *td, double res_norm, double soln_norm, Eigen::VectorXd pre_bf, Eigen::VectorXd residual, std::vector<std::pair<double, int>> OrthogFluxes, TString suffix = "") {
+
+    size_t NEqs = FluxMatrix_Solve.rows();
+    
+    TH1 *FDFlux_nominalfit = static_cast<TH1 *>(FDFlux_osc->Clone("FDFlux_nominalfit"));
+    FDFlux_nominalfit->Reset();
+    FillHistFromEigenVector(FDFlux_nominalfit, pre_bf, low_offset);
+
+    TH1 *nominalfit_residual = static_cast<TH1 *>(FDFlux_osc->Clone("Nominalfit_residual"));
+    nominalfit_residual->Reset();
+    FillHistFromEigenVector(nominalfit_residual, residual, low_offset);
+
+
+    TH1 *FDFlux_NewFit = static_cast<TH1 *>(FDFlux_osc->Clone("FDFlux_NewFit"+suffix));
+    FDFlux_NewFit->Reset();
+
+    Eigen::VectorXd bf = (FluxMatrix_Reduced * last_solution);
+    FillHistFromEigenVector(FDFlux_NewFit, bf, low_offset);
+
+    TH1 *FDFlux_osc_wr = static_cast<TH1 *>(FDFlux_osc->Clone("FDFlux_osc"));
+    TH1 *FDFlux_targ_OORScale =
+        static_cast<TH1 *>(FDFlux_osc->Clone("FDFlux_targ_OORScale"));
+    FDFlux_targ_OORScale->Reset();
+    FillHistFromEigenVector(FDFlux_targ_OORScale, Target, low_offset);
+
+    TH1 *FDFlux_targ = static_cast<TH1 *>(FDFlux_osc->Clone("FDFlux_targ"));
+    FDFlux_targ->Reset();
+    Eigen::VectorXd Target_rescale = Target;
+    Target_rescale.topRows(FitIdxLow).array() /= fParams.OORFactor;
+    // Target_rescale.bottomRows(NBins - FitIdxHigh).array() /= fParams.OORFactor;
+    Target_rescale.bottomRows(NEqs - (FitIdxHigh + 1) ).array() /= fParams.OORFactor;
+    FillHistFromEigenVector(FDFlux_targ, Target_rescale, low_offset);
+
+
+    TH1D *Coeffs =
+        new TH1D("Coeffs", "", last_solution.rows(), 0, last_solution.rows());
+    FillHistFromEigenVector(Coeffs, last_solution);
+    Int_t xval = 0; 
+    for (size_t bi_it = 0; bi_it < OAbinsperhist.size(); bi_it++) { 
+      Int_t xval2 = xval;
+      for (size_t bi2_it = 0; bi2_it < AllOAbins[bi_it].size(); bi2_it++) {
+	xval2 += AllOAbins[bi_it][bi2_it];
+        TLine *l = new TLine(xval2,Coeffs->GetMinimum(),xval2,Coeffs->GetMaximum());
+	l->SetLineColor(kGreen);
+        Coeffs->GetListOfFunctions()->Add(l);
+      }
+      xval += OAbinsperhist[bi_it];
+      TLine *l = new TLine(xval,Coeffs->GetMinimum(),xval,Coeffs->GetMaximum());
+      l->SetLineColor(kRed);
+      // TLine *l = new TLine(20,-1,20,1);
+      Coeffs->GetListOfFunctions()->Add(l);
+    }
+
+    std::pair<double, int> fluxone = GetFluxCurrAndOA(OrthogFluxes[0]);
+    double CurrentCenter = fluxone.first;
+    double OAbin = fluxone.second;
+
+
+    TTree *ParTree =
+        new TTree("Params", "Params"); 
+    ParTree->Branch("res_norm", &res_norm, "res_norm/D");
+    ParTree->Branch("soln_norm", &soln_norm, "soln_norm/D");
+    ParTree->Branch("CurrentCenter", &CurrentCenter, "CurrentCenter/D");
+    ParTree->Branch("OAbin", &OAbin, "OAbin/I");
+    ParTree->Fill();
+
+    FDFlux_osc_wr->SetDirectory(td);
+    FDFlux_targ->SetDirectory(td);
+    FDFlux_targ_OORScale->SetDirectory(td);
+    FDFlux_nominalfit->SetDirectory(td);
+    nominalfit_residual->SetDirectory(td);
+    FDFlux_NewFit->SetDirectory(td);
+    Coeffs->SetDirectory(td);
+    ParTree->SetDirectory(td);
+
+    
+  }
+
   void WriteOrthogs(TDirectory *td, std::vector<std::pair<double, int>> OrthogFluxes, TString suffix ) {
     size_t NFluxes = FluxMatrix_Solve.cols();
     size_t NEqs = FluxMatrix_Solve.rows();
@@ -2147,7 +2159,7 @@ public:
 
     size_t NFluxes = FluxMatrix_Solve.cols();
     size_t NEqs = FluxMatrix_Solve.rows();
-    size_t NBins = NEqs - NFluxes;
+    // size_t NBins = NEqs - NFluxes;
 
     TH1 *FDFlux_osc_wr = static_cast<TH1 *>(FDFlux_osc->Clone("FDFlux_osc"));
     TH1 *FDFlux_targ_OORScale =
@@ -2173,9 +2185,9 @@ public:
         new TH1D("Coeffs", "", last_solution.rows(), 0, last_solution.rows());
     FillHistFromEigenVector(Coeffs, last_solution);
     Int_t xval = 0; 
-    for (int bi_it = 0; bi_it < OAbinsperhist.size(); bi_it++) { 
+    for (size_t bi_it = 0; bi_it < OAbinsperhist.size(); bi_it++) { 
       Int_t xval2 = xval;
-      for (int bi2_it = 0; bi2_it < AllOAbins[bi_it].size(); bi2_it++) {
+      for (size_t bi2_it = 0; bi2_it < AllOAbins[bi_it].size(); bi2_it++) {
 	xval2 += AllOAbins[bi_it][bi2_it];
         TLine *l = new TLine(xval2,Coeffs->GetMinimum(),xval2,Coeffs->GetMaximum());
 	l->SetLineColor(kGreen);
@@ -2192,7 +2204,7 @@ public:
         new TH1D("RegMatrixDiagonal", "", NFluxes, 0, NFluxes);
     Eigen::VectorXd RegDiagVec = last_solution;
     RegDiagVec.setZero();
-    for (int reg_iter = 0; reg_iter < NFluxes; reg_iter++) {
+    for (size_t reg_iter = 0; reg_iter < NFluxes; reg_iter++) {
         RegDiagVec(reg_iter) = FluxMatrix_Reduced.bottomRows(NFluxes)(reg_iter, reg_iter);
 
 	// std::cout << "[" << reg_iter << "," << reg_iter << "] = " << FluxMatrix_Reduced.bottomRows(NFluxes)(reg_iter, reg_iter) << std::endl;
@@ -2253,9 +2265,9 @@ public:
       return;
     }
 
-    size_t NFluxes = FluxMatrix_Solve.cols();
-    size_t NEqs = FluxMatrix_Solve.rows();
-    size_t NBins = NEqs - NFluxes;
+    // size_t NFluxes = FluxMatrix_Solve.cols();
+    // size_t NEqs = FluxMatrix_Solve.rows();
+    // size_t NBins = NEqs - NFluxes;
 
     TH1 *FDFlux_prefilter = static_cast<TH1 *>(FDFlux_osc->Clone("FDFlux_prefilter"));
     FDFlux_prefilter->Reset();
@@ -2267,9 +2279,9 @@ public:
         new TH1D("Coeffs_prefilter", "", last_solution.rows(), 0, last_solution.rows());
     FillHistFromEigenVector(Coeffs_prefilter, last_solution);
     Int_t xval = 0; 
-    for (int bi_it = 0; bi_it < OAbinsperhist.size(); bi_it++) { 
+    for (size_t bi_it = 0; bi_it < OAbinsperhist.size(); bi_it++) { 
       Int_t xval2 = xval;
-      for (int bi2_it = 0; bi2_it < AllOAbins[bi_it].size(); bi2_it++) {
+      for (size_t bi2_it = 0; bi2_it < AllOAbins[bi_it].size(); bi2_it++) {
 	xval2 += AllOAbins[bi_it][bi2_it];
         TLine *l = new TLine(xval2,Coeffs_prefilter->GetMinimum(),xval2,Coeffs_prefilter->GetMaximum());
 	l->SetLineColor(kGreen);

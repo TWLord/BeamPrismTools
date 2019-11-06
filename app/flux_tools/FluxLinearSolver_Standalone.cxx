@@ -26,6 +26,7 @@ int weightmethod = 1;
 size_t nsteps = 20;
 
 double OutOfRangeChi2Factor = 0.1;
+double NominalRegFactor = 1E-9; 
 double BCRegFactor = 1;
 double CSNorm = -8;
 double StabilityFactor = -3;
@@ -36,7 +37,8 @@ std::vector<std::vector<std::pair<double, double>>> CurrentRangesplit;
 double coeffMagLimit = 0;
 int leastNCoeffs= 0;
 double NominalCurrent = 293; 
-int NominalHist = 4;
+// int NominalHist = 4;
+size_t NominalHist = 4;
 
 void SayUsage(char const *argv[]) {
   std::cout << "Runlike: " << argv[0]
@@ -196,6 +198,8 @@ void handleOpts(int argc, char const *argv[]) {
       leastNCoeffs= str2T<int>(argv[++opt]);
     } else if (std::string(argv[opt]) == "-NSTEPS") {
       nsteps = str2T<int>(argv[++opt]);
+    } else if (std::string(argv[opt]) == "-NRF") {
+      NominalRegFactor = str2T<double>(argv[++opt]);
     } else if (std::string(argv[opt]) == "-RF") {
       BCRegFactor = str2T<double>(argv[++opt]);
     } else if (std::string(argv[opt]) == "-SF") {
@@ -286,9 +290,20 @@ int main(int argc, char const *argv[]) {
  
   // For CSSolve, sets starting reg factor for iterative CS solver equal to nominal reg factor 
   p.startCSequalreg = true;
-  p.OrthogSolve = false;
+  p.OrthogSolve = true;
 
   int ncoeffs = 0;
+  bool CSSolve = false;
+  bool CNLSolve = true;
+  bool CNLSolveOnce = false;
+  if (nsteps == 1) {
+    CNLSolveOnce = true;
+  }
+  if (CNLSolve || CNLSolveOnce) {
+    p.OrthogSolve = false;
+  }
+  bool OrthogGS = false;
+
   fls.Initialize(p, ncoeffs, {NDFile, NDHists}, {FDFile, FDHist}, {BCTree, BCBranches}, true);
 
   // std::array<double, 6> OscParameters{0.297,   0.0214,   0.534,
@@ -302,10 +317,6 @@ int main(int argc, char const *argv[]) {
   // size_t nsteps = 20;
   // double start = -18;
   
-  bool CSSolve = false;
-  bool CNLSolve = true;
-  bool OrthogGS = false;
-  // bool OrthogSolve = false;
 
   if (OrthogGS) {
     std::string GSFile = OutputFile.substr(0, OutputFile.size()-5)+"_ortho.root";
@@ -316,16 +327,21 @@ int main(int argc, char const *argv[]) {
   }
 
   if (p.OrthogSolve) {
+    double soln_norm, res_norm;
+    // double reg_exp = BCRegFactor;
+    double reg_exp = -9;
     // write function that runs solve for nominal input fluxes,
     // sorts based on QR orthog projection, then re-calls solve.. 
     // but can also solve for nominal + additional fluxes.. 
     // use flux_reduced architecture in header file, there is now a param,
     // OrthogSolve which, if set, doesn't change FluxMatrix_Solve.. 
     // However you will need to re-set regularisation manually. :/   
+    fls.doResidualOrthog( pow(10, reg_exp), 1, res_norm, soln_norm, OutputFile );
     //
     // then can call function to project all fluxes in fluxmatrix_solve
     // onto residual vector, (bf - target). This is just dot product of
     // each flux (col) with residual / residual dot residual ( * residual? )
+    // fls.WriteOrthogSolve(OutputFile, res_norm, soln_norm);
   }
 
   if (CSSolve) {
@@ -365,7 +381,7 @@ int main(int argc, char const *argv[]) {
       double largecoeffs = 0;
       double coeffsum = 0;
 
-      for (int i = 0; i < omega.size(); i++) {
+      for (size_t i = 0; i < omega.size(); i++) {
         // std::cout << omega[i] << std::endl;
 	CoeffChange->SetBinContent( i+1, l_it+1, omega[i]);
 	if (omega[i] > coefflim) {
@@ -421,6 +437,16 @@ int main(int argc, char const *argv[]) {
     CoeffChange->Write();
     WeightChange->Write();
     // kcurve.Write("kcurve");
+    f->Write();
+
+  } else if (CNLSolveOnce) {
+    double soln_norm=0, res_norm=0;
+    // double input_reg = pow(10,-9);
+    double input_reg = NominalRegFactor; 
+    fls.SolveLast(input_reg, BCRegFactor, res_norm, soln_norm);
+
+    TFile *f = CheckOpenFile(OutputFile, "RECREATE");
+    fls.Write(f, res_norm, soln_norm);
     f->Write();
 
   } else if (CNLSolve) {
