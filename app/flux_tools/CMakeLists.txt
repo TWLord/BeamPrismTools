@@ -8,6 +8,7 @@ SET(FLUX_APPS
   MakeLitedk2nu
   FluxSmusher
   FluxLinearSolver_Standalone
+  EtrueErecoSolver
 )
 
 include_directories(${INCDIRS})

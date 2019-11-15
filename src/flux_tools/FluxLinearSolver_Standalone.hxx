@@ -2150,7 +2150,7 @@ public:
     }
   }
 
-  // void Store(TDirectory *td, double res_norm = 0, double soln_norm = 0) {
+  // void Store(TDirectory *td, double res_norm = 0, double soln_norm = 0) {}
 
   void Write(TDirectory *td, double res_norm = 0, double soln_norm = 0) {
     if (!last_solution.rows()) {
