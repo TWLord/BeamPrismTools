@@ -1,4 +1,5 @@
 #include "FluxLinearSolver_Standalone.hxx"
+#include "EtrueErecoSolver.hxx"
 
 #include "TGraph.h"
 // extra stuff for plotting
@@ -9,6 +10,8 @@
 #include "TTreeReader.h"
 #include "TTreeReaderValue.h"
 #include "TLine.h"
+#include "Math/Minimizer.h"
+#include "Math/GSLMinimizer.h"
 
 // Global Var Defs
 std::string OutputFile = "ERecoSolver.root";
@@ -24,7 +27,14 @@ int NEnuBinMerge = 0;
 
 int method = 1;
 int weightmethod = 1;
+int toyMid = 1, toyFid = 1;
 size_t nsteps = 20;
+
+int Ebins = 8;
+
+double SSLmax = 0.0;
+double SSLpb = 0.0;
+double NSL = 0.0;
 
 double OutOfRangeChi2Factor = 0.1;
 double NominalRegFactor = 1E-9; 
@@ -47,6 +57,22 @@ size_t NominalHist = 4;
 //
 
 // Helper Fctns
+void SayUsage(char const *argv[]) {
+  std::cout << "Runlike: " << argv[0]
+            << " -toyM <1:mRandom, 2:mRandomLimited, 3:mGauss> -toyf <1:mRandom, 2:mRandomLimited, 3:mGauss> "
+               " -Ebins <Num. of Ebins> " 
+               " -N <NDFluxFile,NDFluxHistName> -F <FDFluxFile,FDFluxHistName> "
+	       "[ -W <FDWeightFile> -WM <1:TotalFlux, 2:MaxFlux>		"
+               "-o Output.root -M <1:SVD, 2:QR, 3:Normal, 4:Inverse, 5:COD, 6:ConjugateGradient, 7:LeastSquaresConjugateGradient, 8: BiCGSTAB, 9: BiCGSTAB w/ last sol'n guess> -MX "
+               "<NEnuBinMerge> -OR OutOfRangeChi2Factor -RF BeamConfigsRegFactor "
+               "-CML <CoeffMagLowerBound> -CNL <CoefficientNumberLimit> "
+	       "-B <ConfTree,ConfBranches> -Nom <NominalHist(number),NominalCurrent> "
+	       "-FR <FitRangeLow, FitRangeHigh> -CR <CurrentRangeLow,CurrentRangeHigh> "
+	       "-CRsplit <CR1Low,CR1High:CR2Low,CR2High:> "
+	       "-OA <OffAxisLow_OffAxisHigh:BinWidth,....,OffAxisLow_OffAxisHigh:BinWidth> ]"
+	       "-NOA <NOALow_NOAHigh:BinWidth,....,NOALow_NOAHigh:BinWidth> ]"
+            << std::endl;
+}
 void handleOpts(int argc, char const *argv[]) {
   int opt = 1;
   while (opt < argc) {
@@ -172,6 +198,20 @@ void handleOpts(int argc, char const *argv[]) {
       StabilityFactor = str2T<double>(argv[++opt]);
     } else if (std::string(argv[opt]) == "-CSnorm") {
       CSNorm = str2T<double>(argv[++opt]);
+
+    } else if (std::string(argv[opt]) == "-toyM") {
+      toyMid = str2T<int>(argv[++opt]);
+    } else if (std::string(argv[opt]) == "-toyF") {
+      toyFid = str2T<int>(argv[++opt]);
+    } else if (std::string(argv[opt]) == "-Ebins") {
+      Ebins = str2T<int>(argv[++opt]);
+    } else if (std::string(argv[opt]) == "-SSLmax") {
+      SSLmax = str2T<double>(argv[++opt]);
+    } else if (std::string(argv[opt]) == "-SSLpb") {
+      SSLpb = str2T<double>(argv[++opt]);
+    } else if (std::string(argv[opt]) == "-NSL") {
+      NSL = str2T<double>(argv[++opt]);
+
     } else if ((std::string(argv[opt]) == "-?") ||
                (std::string(argv[opt]) == "--help")) {
       SayUsage(argv);
@@ -184,8 +224,14 @@ void handleOpts(int argc, char const *argv[]) {
     }
     opt++;
   }
-  if (coeffMagLimit && leastNCoeffs) { 
+  if (coeffMagLimit && leastNCoeffs) {
       std::cout << "[ERROR]: Can only use either magnitude coeff limit OR number coefficient limit: \""
+                << std::endl;
+      SayUsage(argv);
+      exit(1);
+  }
+  if (CurrentRangesplit.size() != NDHists.size() && CurrentRangesplit.size() ) {
+      std::cout << "[ERROR]: Check CRS / CS parameters \""
                 << std::endl;
       SayUsage(argv);
       exit(1);
@@ -202,13 +248,51 @@ int main(int argc, char const *argv[]) {
 
   // Set Params here 
   // p. .....
+  p.MergeENuBins = NEnuBinMerge;
+  p.CurrentRange = {CurrentRangeLow, CurrentRangeHigh};
+  p.CurrentRangeSplit = CurrentRangesplit;
+  p.NominalFlux = {NominalHist, NominalCurrent};
+  p.OffAxisRangesDescriptor = OARange;
+  p.NominalOffAxisRangesDescriptor = NomOARange;
 
-  // ers.Initialize();
+  // p.toyM_id = toyMid;
+  // p.toyF_id = toyFid;
+  p.toyM_id = ERecoSolver::Params::mRandomLimited;
+  p.toyF_id = ERecoSolver::Params::fRandom;
+  // p.smear_id = ERecoSolver::Params::sRandom;
+  p.smear_id = ERecoSolver::Params::sGauss;
 
+  p.scalebyE = true;
+  p.scaleOrderOne = true;
 
-  // ers.ComputeMatrix();
-  
+  // int Ebins = 20;
+  int NFluxes = Ebins;
+  // int NFluxes = 10;
+
+  ers.Initialize(p, {NDFile, NDHists}, {FDFile, FDHist}, Ebins);
+
+  // bool SmearSensingMatrix = true;
+  bool SmearSensingMatrix = false;
+  bool SmearRecoFlux = true;
+
+  double SenseSmearingLimit = SSLmax;
+  double SenseSmearingLimitPerBin = SSLpb;
+  double NoiseSmearingLimit = NSL;
+  // double SmearingLimit = 0.00;
+  // double SmearingLimit = 0.01;
+
+  if (NDFile.size() && NDHists.size()) {
+    ers.doMatrixMapAnalysis( Ebins, NFluxes, SenseSmearingLimit, SenseSmearingLimitPerBin, NoiseSmearingLimit, SmearSensingMatrix, SmearRecoFlux, OutputFile);
+  } else {
+    ers.doToyMatrixMapAnalysis( Ebins, NFluxes, SenseSmearingLimit, NoiseSmearingLimit, SmearSensingMatrix, SmearRecoFlux);
+  }
+
   // ers.PlotMatrix();
-  // ers.Write(f); // add any other to-write external vals
-  f->Write();
+
+  // TFile *f = CheckOpenFile(OutputFile, "RECREATE");
+  // ers.Write1D(f, Ebins); // add any other to-write external vals
+  // ers.Write1Dtoy(f, Ebins); // add any other to-write external vals
+  // ers.Write2D(f, Ebins); // add any other to-write external vals
+  // f->Close();
+  // f->Write();
 }

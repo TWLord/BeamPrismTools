@@ -667,6 +667,7 @@ public:
 
       std::vector<double> tmpv;
       // for (int zh_it = 0; zh_it < AllZbins.size(); zh_it++) {
+      // }
       for (size_t zbi_it : HistZbins) {
 	tmpv.emplace_back(Flux3D->GetZaxis()->GetBinCenter(zbi_it)); 
       }

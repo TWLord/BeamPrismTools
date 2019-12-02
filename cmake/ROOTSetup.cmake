@@ -37,8 +37,10 @@ LIST(APPEND ROOT_LIBS
   Graf3d
   Gpad
   MathCore
+  MathMore
   Matrix
   Physics
+  Minuit2
   Minuit)
 
 cmessage ( STATUS "[ROOT]: root-config --version: ${ROOT_VERSION} ")

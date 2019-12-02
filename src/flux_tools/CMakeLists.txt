@@ -5,7 +5,6 @@ add_library(DUNE-PRISM_FluxTools
   FluxFitter.cxx
   FluxCombiner.cxx
   EffectiveFluxUncertaintyHelper.cxx
-  EtrueErecoSolver.cxx
 )
 
 if(DEFINED USE_FHICL AND USE_FHICL)
