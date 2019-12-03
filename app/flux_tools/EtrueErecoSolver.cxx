@@ -257,6 +257,7 @@ int main(int argc, char const *argv[]) {
 
   // p.toyM_id = toyMid;
   // p.toyF_id = toyFid;
+  // p.toyM_id = ERecoSolver::Params::mRandom;
   p.toyM_id = ERecoSolver::Params::mRandomLimited;
   p.toyF_id = ERecoSolver::Params::fRandom;
   // p.smear_id = ERecoSolver::Params::sRandom;

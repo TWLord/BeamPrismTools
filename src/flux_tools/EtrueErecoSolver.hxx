@@ -716,6 +716,9 @@ public:
 
 
     ComputeMatrix(SquareTrueFluxMatrix, SquareSmearedRecoFluxMatrix);
+    // std::cout << "RecoVec.size() : " << RecoVec.size() << std::endl;
+    std::cout << "RebinnedSmearedRecoFluxMatrix.cols() : " << RebinnedSmearedRecoFluxMatrix.cols() << std::endl;
+
     // RestoredTrueFluxMatrix = RecoSensingMatrix.inverse() * SmearedRecoFluxMatrix;// Only works if you change them to square fluxes
 
     // Fit sensing matrix with TrueFluxMatrix - set to square starting mats
@@ -776,9 +779,8 @@ public:
     if ( FDFluxVector.size() ) {
       // std::cout << FDFluxVector << std::endl;
       Eigen::VectorXd FDRecoVector = TrueSensingMatrix*FDFluxVector;
-	std::cout << "DEBUG" << std::endl;
+      std::cout << " Applying low-rank sensing matrix to FD Reco Vector " << std::endl;
       Eigen::VectorXd FDRestoredVector = applyLowRankSensingMatrix( fittedSensingMatrix.inverse(), FDRecoVector);
-	std::cout << "DEBUG" << std::endl;
       // std::cout << FDRecoVector << std::endl;
       // Eigen::VectorXd FDRestoredVector = (fittedSensingMatrix.inverse())*VectorRebin(FDRecoVector, Ebins, false); //old - doesnt account for scaledu p size
       // Eigen::VectorXd FDRestoredVector = (ScaledUpFittedSensingMatrix.inverse())*VectorRebin(FDRecoVector, Ebins, false);
@@ -863,7 +865,7 @@ public:
         float limit = lim;
         TrueSensingMatrix(col_it, col_it) = 1;
 	int aGevBins = nEbins/10 + (nEbins%10 != 0) ;
-        for (int sub_it = col_it+nEbins/10; sub_it >= 0; sub_it--) {
+        for (int sub_it = col_it+aGevBins; sub_it >= 0; sub_it--) {
           if ( sub_it == col_it || sub_it >= nEbins) {
 	    continue;
 	  }
@@ -971,10 +973,12 @@ public:
 
   Eigen::VectorXd applyLowRankSensingMatrix(Eigen::MatrixXd aMat, Eigen::VectorXd RecoVec) {
 
-    if ( ! RecoVec.size()%aMat.cols()) {
-      int multiplier = RecoVec.size()/aMat.cols(); 
+    Eigen::VectorXd RestoredVec = Eigen::VectorXd::Zero(RecoVec.size());
 
-      Eigen::VectorXd RestoredVec = Eigen::VectorXd::Zero(RecoVec.size());
+    std::cout << "RecoVec.size() : " << RecoVec.size() << std::endl;
+    std::cout << "aMat.cols() : " << aMat.cols() << std::endl;
+    // if ( ! RecoVec.size()%aMat.cols()) {
+      int multiplier = RecoVec.size()/aMat.cols(); 
 
       for (int it = 0; it < RecoVec.size(); it++) {
         double newbin = 0;
@@ -988,10 +992,10 @@ public:
         }
         RestoredVec(it) = newbin; 
       }
-    } else { 
+    // } else { 
       // define some averaging between bins over non-divisible binning schema
       
-    }
+    // }
     return RestoredVec;
   }
 
@@ -1103,6 +1107,112 @@ public:
 
     return SmearedMatrix;
   }
+
+  /*Eigen::MatrixXd SolveSensingMatrix( const Eigen::MatrixXd &aTrueFluxMat, const Eigen::MatrixXd &aRecoFluxMat, double reg_param, double &res_norm, double &soln_norm bool guidematrix = false ) {
+  // Eigen::VectorXd runSolver(double reg_param, double &res_norm, double &soln_norm) {
+  // }
+
+    bool use_reg = reg_param > 0;
+    size_t NFluxes = FluxMatrix_Solve.cols();
+    size_t NEqs = FluxMatrix_Solve.rows();
+    size_t NBins = NEqs - NFluxes;
+
+    switch (fParams.algo_id) {
+    case Params::kSVD: {
+      if (use_reg) {
+        last_solution =
+            FluxMatrix_Reduced.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)
+                .solve(Target);
+      } else {
+        last_solution = FluxMatrix_Reduced.topRows(NBins)
+                            .bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)
+                            .solve(Target.topRows(NBins));
+      }
+      break;
+    }
+    case Params::kQR: {
+      if (use_reg) {
+        last_solution = FluxMatrix_Reduced.colPivHouseholderQr().solve(Target);
+      } else {
+        last_solution =
+            FluxMatrix_Reduced.topRows(NBins).colPivHouseholderQr().solve(
+                Target.topRows(NBins));
+      }
+      break;
+    }
+    case Params::kNormal: {
+      if (use_reg) {
+        last_solution = (FluxMatrix_Reduced.transpose() * FluxMatrix_Reduced)
+                            .ldlt()
+                            .solve(FluxMatrix_Reduced.transpose() * Target);
+      } else {
+        last_solution = (FluxMatrix_Reduced.transpose() * FluxMatrix_Reduced)
+                            .topRows(NBins)
+                            .ldlt()
+                            .solve(FluxMatrix_Reduced.topRows(NBins).transpose() *
+                                   Target.topRows(NBins));
+      }
+      break;
+    }
+    case Params::kInverse: {
+      if (use_reg) {
+        last_solution = ((FluxMatrix_Reduced.topRows(NBins).transpose() *
+                          FluxMatrix_Reduced.topRows(NBins)) +
+                         FluxMatrix_Reduced.bottomRows(NFluxes).transpose() *
+                             FluxMatrix_Reduced.bottomRows(NFluxes))
+                            .inverse() *
+                        FluxMatrix_Reduced.topRows(NBins).transpose() *
+                        Target.topRows(NBins);
+      } else {
+        last_solution = (FluxMatrix_Reduced.topRows(NBins).transpose() *
+                         FluxMatrix_Reduced.topRows(NBins))
+                            .inverse() *
+                        FluxMatrix_Reduced.topRows(NBins).transpose() *
+                        Target.topRows(NBins);
+      }
+      break;
+    }
+    case Params::kCOD: {
+      if (use_reg) {
+        last_solution = FluxMatrix_Reduced.completeOrthogonalDecomposition().solve(Target);
+      } else {
+        last_solution =
+            FluxMatrix_Reduced.topRows(NBins).completeOrthogonalDecomposition().solve(
+                Target.topRows(NBins));
+      }
+      break;
+    }
+    }
+    if (!last_solution.rows()) {
+      res_norm = 0;
+      soln_norm = 0;
+      return last_solution;
+    }
+
+    res_norm = ((FluxMatrix_Reduced.topRows(NBins) * last_solution) -
+                Target.topRows(NBins))
+                   .squaredNorm();
+    soln_norm = 0;
+    if (reg_param > 0) {
+      soln_norm =
+          (FluxMatrix_Reduced.bottomRows(NFluxes) * last_solution / reg_param)
+              .squaredNorm();
+    }
+
+    if ( isnan(res_norm) ) {
+        std::cerr << "[ERROR] : NaN res norm found. " << std::endl;
+        std::cerr << last_solution << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+
+    if ( isnan(soln_norm) ) {
+        std::cerr << "[ERROR] : NaN soln norm found. " << std::endl;
+        std::cerr << last_solution << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+
+    return last_solution;
+  }*/
 
   Eigen::MatrixXd fitSensingMatrix( const Eigen::MatrixXd &aTrueFluxMat, const Eigen::MatrixXd &aRecoFluxMat, bool guidematrix = false ) {
     int Ebins = 0;
