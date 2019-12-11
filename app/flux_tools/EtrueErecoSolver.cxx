@@ -282,8 +282,17 @@ int main(int argc, char const *argv[]) {
   // double SmearingLimit = 0.00;
   // double SmearingLimit = 0.01;
 
+  bool doFit = true;
+  bool doSquareSolve = false;
+
+  double reg_param = BCRegFactor;
+
   if (NDFile.size() && NDHists.size()) {
-    ers.doMatrixMapAnalysis( Ebins, NFluxes, SenseSmearingLimit, SenseSmearingLimitPerBin, NoiseSmearingLimit, SmearSensingMatrix, SmearRecoFlux, OutputFile);
+    if (doFit) {
+      ers.doMatrixFitAnalysis( Ebins, NFluxes, SenseSmearingLimit, SenseSmearingLimitPerBin, NoiseSmearingLimit, SmearSensingMatrix, SmearRecoFlux, OutputFile);
+    } else if (doSquareSolve) {
+      ers.doMatrixMapAnalysis( Ebins, NFluxes, SenseSmearingLimit, SenseSmearingLimitPerBin, NoiseSmearingLimit, SmearSensingMatrix, SmearRecoFlux, OutputFile, reg_param);
+    }
   } else {
     ers.doToyMatrixMapAnalysis( Ebins, NFluxes, SenseSmearingLimit, NoiseSmearingLimit, SmearSensingMatrix, SmearRecoFlux);
   }

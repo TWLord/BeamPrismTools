@@ -10,6 +10,7 @@
 #include "Eigen/IterativeLinearSolvers"
 
 #include "TFile.h"
+#include "TGraph.h"
 #include "TH1.h"
 #include "TH2.h"
 #include "TH3.h"
@@ -49,6 +50,22 @@ double FrobeniusNorm( const Eigen::MatrixXd & theMatrix ) {
   norm = std::sqrt(norm);
   return norm;
 }
+
+double deriv(double *evals, double step) {
+  return (-evals[2] + 8 * evals[1] - 8 * evals[-1] + evals[-2]) / (12 * step);
+}
+
+double second_deriv(double *evals, double step) {
+  double first_deriv_evals[5];
+
+  first_deriv_evals[0] = deriv(&evals[-2], step);
+  first_deriv_evals[1] = deriv(&evals[-1], step);
+  first_deriv_evals[3] = deriv(&evals[1], step);
+  first_deriv_evals[4] = deriv(&evals[2], step);
+
+  return deriv(&first_deriv_evals[2], step);
+}
+
 
 class TheFitFunction { 
 
@@ -174,7 +191,9 @@ public:
   static Params GetDefaultParams() {
     Params p;
 
-    p.algo_id = Params::kSVD;
+    // p.algo_id = Params::kSVD;
+    // p.algo_id = Params::kConjugateGradient;
+    p.algo_id = Params::kInverse;
     p.toyM_id = Params::mRandom;
     p.toyF_id = Params::fRandom;
     p.smear_id = Params::sRandom;
@@ -677,26 +696,15 @@ public:
     return newMat;
   }
 
-  void doMatrixMapAnalysis(int Ebins, int NFluxes, double SenseSmearingLimit, double SSLpb, double NoiseSmearingLimit, bool SmearSensingMatrix, bool SmearRecoFlux, std::string OutputFile) {
+  void doMatrixFitAnalysis(int Ebins, int NFluxes, double SenseSmearingLimit, double SSLpb, double NoiseSmearingLimit, bool SmearSensingMatrix, bool SmearRecoFlux, std::string OutputFile) {
     Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
 
-    // TrueFluxMatrix = SquareTrueFluxMatrix;
     Ebins = TrueFluxMatrix.rows();
     std::cout << "TrueFluxMatrix.rows() = " << Ebins << std::endl;
     std::cout << "FluxMatrix_Full.rows() = " << FluxMatrix_Full.rows() << std::endl;
-    if ( true == false ) {
-      ///LoadToySensingMatrix(Ebins);
-      ///RecoFluxMatrix = TrueSensingMatrix * SquareTrueFluxMatrix;
-    }
 
     LoadToySensingMatrix(FluxMatrix_Full.rows(), SenseSmearingLimit, SSLpb);
     RecoFluxMatrix = TrueSensingMatrix * FluxMatrix_Full; 
-    // std::cout << RecoFluxMatrix.format(CleanFmt) << std::endl; 
-
-    /////RecoFluxMatrix = TrueSensingMatrix * SquareTrueFluxMatrix;
-    
-    // std::cout << " --- Reco Fluxes --- " << std::endl;
-    // std::cout << RecoFluxMatrix.format(CleanFmt) << std::endl; 
 
     if (SmearRecoFlux) {
       std::cout << "Smear Reco Fluxes" << std::endl;
@@ -716,24 +724,308 @@ public:
 
 
     ComputeMatrix(SquareTrueFluxMatrix, SquareSmearedRecoFluxMatrix);
-    // std::cout << "RecoVec.size() : " << RecoVec.size() << std::endl;
     std::cout << "RebinnedSmearedRecoFluxMatrix.cols() : " << RebinnedSmearedRecoFluxMatrix.cols() << std::endl;
 
-    // RestoredTrueFluxMatrix = RecoSensingMatrix.inverse() * SmearedRecoFluxMatrix;// Only works if you change them to square fluxes
+    // Fit sensing matrix with TrueFluxMatrix : rebin rows to get Ebins as required 
+    Eigen::MatrixXd fittedSensingMatrix = fitSensingMatrix( MatrixRebinRows(TrueFluxMatrix, Ebins), RebinnedSmearedRecoFluxMatrix, true);
+    // This one works well but takes awhile to run
+
+    std::cout << " --- Fitted Sensing Matrix --- " << std::endl;
+    std::cout << fittedSensingMatrix.format(CleanFmt) << std::endl;
+    std::cout << " --- Rebinned True Sensing Matrix --- " << std::endl;
+    std::cout << MatrixRebinRows( MatrixRebinCols(TrueSensingMatrix, Ebins, false), Ebins, true).format(CleanFmt) << std::endl;
+    //////////////// Eigen::MatrixXd ScaledUpFittedSensingMatrixInv = scaleUpSensingMatrix(fittedSensingMatrix.inverse(), FluxMatrix_Full.rows());
+
+    TFile *f = CheckOpenFile(OutputFile, "RECREATE");
+
+    if ( FDFluxVector.size() ) {
+      Eigen::VectorXd FDRecoVector = TrueSensingMatrix*FDFluxVector;
+      std::cout << " Applying low-rank sensing matrix to FD Reco Vector " << std::endl;
+      Eigen::VectorXd FDRestoredVector = applyLowRankSensingMatrix( fittedSensingMatrix.inverse(), FDRecoVector);
+      ///////////////////////////////Eigen::VectorXd FDRestoredVector = ScaledUpFittedSensingMatrixInv*FDRecoVector;
+
+      WriteVector(f, FDFluxVector.size(), FDFluxVector, "FDTrueVector", FDFluxOriginal.get());
+      WriteVector(f, FDRecoVector.size(), FDRecoVector, "FDRecoVector", FDFluxOriginal.get());
+      WriteVector(f, FDRestoredVector.size(), FDRestoredVector, "FDRestoredVector", FDFluxOriginal.get());
+
+      FDFluxOriginal->SetName("FDFluxOriginal");
+      FDFluxOriginal->Write();
+    }
+
+    f->Close();
+
+  }
+
+  void doMatrixMapAnalysis(int Ebins, int NFluxes, double SenseSmearingLimit, double SSLpb, double NoiseSmearingLimit, bool SmearSensingMatrix, bool SmearRecoFlux, std::string OutputFile, double reg_param) {
+    Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
+
+    Ebins = TrueFluxMatrix.rows();
+    std::cout << "TrueFluxMatrix.rows() = " << Ebins << std::endl;
+    std::cout << "FluxMatrix_Full.rows() = " << FluxMatrix_Full.rows() << std::endl;
+
+    bool debug = false;
+    if (debug) {
+      // Do solve without smearing reco matrices - for testing
+      LoadToySensingMatrix(Ebins, SenseSmearingLimit, SSLpb);
+      Eigen::MatrixXd RebinnedTrueFluxMatrix = MatrixRebinRows(FluxMatrix_Full, Ebins);
+      std::cout << " --- Rebin 1 : True Fluxes --- " << std::endl;
+      // std::cout << RebinnedTrueFluxMatrix.format(CleanFmt) << std::endl; 
+      Eigen::MatrixXd aSquareTrueFluxMatrix = MatrixRebinCols(RebinnedTrueFluxMatrix, Ebins);
+      std::cout << " --- Rebin 2 : True Fluxes --- " << std::endl;
+      Eigen::MatrixXd SquareSmearedRecoFluxMatrix = TrueSensingMatrix * aSquareTrueFluxMatrix;
+      // reg_param = 0.5;
+      double res_norm = 0;
+      double soln_norm = 0;
+      std::cout << "TrueFluxMatrix.rows() : " << TrueFluxMatrix.rows() << std::endl;
+      std::cout << "Ebins : " << Ebins << std::endl;
+      Eigen::MatrixXd fittedSensingMatrix = SolveSensingMatrix( aSquareTrueFluxMatrix, SquareSmearedRecoFluxMatrix, reg_param, res_norm, soln_norm);
+
+      // Fit sensing matrix with FluxMatrix_Full - all fluxes
+      std::cout << TrueSensingMatrix.cols() << "," << TrueSensingMatrix.rows() << std::endl;
+      std::cout << FluxMatrix_Full.cols() << "," << FluxMatrix_Full.rows() << std::endl;
+      // Eigen::MatrixXd fittedSensingMatrix = fitSensingMatrix(FluxMatrix_Full, (TrueSensingMatrix*FluxMatrix_Full) ); // untested - binning probably wrong
+
+      std::cout << " --- Fitted Sensing Matrix --- " << std::endl;
+      std::cout << fittedSensingMatrix.format(CleanFmt) << std::endl;
+      std::cout << " --- Rebinned True Sensing Matrix --- " << std::endl;
+      std::cout << MatrixRebinRows( MatrixRebinCols(TrueSensingMatrix, Ebins, false), Ebins, true).format(CleanFmt) << std::endl;
+      std::cout << "Frob Norm of (Mat * Etrue) - Ereco : " << FrobeniusNorm((fittedSensingMatrix * aSquareTrueFluxMatrix) - SquareSmearedRecoFluxMatrix) << std::endl;
+
+      Eigen::MatrixXd TrueToyFluxMatrix = LoadToyFluxes(Ebins, Ebins);
+      Eigen::MatrixXd RecoToyFluxMatrix = TrueSensingMatrix * TrueToyFluxMatrix;
+      fittedSensingMatrix = SolveSensingMatrix( TrueToyFluxMatrix, RecoToyFluxMatrix, reg_param, res_norm, soln_norm);
+      std::cout << " --- Fitted Sensing Matrix --- " << std::endl;
+      std::cout << fittedSensingMatrix.format(CleanFmt) << std::endl;
+      std::cout << " --- Rebinned True Sensing Matrix --- " << std::endl;
+      std::cout << MatrixRebinRows( MatrixRebinCols(TrueSensingMatrix, Ebins, false), Ebins, true).format(CleanFmt) << std::endl;
+      std::cout << "Frob Norm of (Mat * Etrue) - Ereco : " << FrobeniusNorm((fittedSensingMatrix * TrueToyFluxMatrix) - RecoToyFluxMatrix) << std::endl;
+
+      TFile *f = CheckOpenFile(OutputFile, "RECREATE");
+      if ( FDFluxVector.size() ) {
+        Eigen::VectorXd FDRecoVector = TrueSensingMatrix*FDFluxVectorRebinned;
+        std::cout << " Applying low-rank sensing matrix to FD Reco Vector " << std::endl;
+        Eigen::VectorXd FDRestoredVector = applyLowRankSensingMatrix( fittedSensingMatrix.inverse(), FDRecoVector);
+
+        WriteVector(f, FDFluxVector.size(), FDFluxVector, "FDTrueVector", FDFluxOriginal.get());
+        WriteVector(f, FDRecoVector.size(), FDRecoVector, "FDRecoVector" );
+        WriteVector(f, FDRestoredVector.size(), FDRestoredVector, "FDRestoredVector" );
+
+        FDFluxOriginal->SetName("FDFluxOriginal");
+        FDFluxOriginal->Write();
+      }
+
+      f->Close();
+      std::cin.ignore();
+      return;
+    }
+
+    LoadToySensingMatrix(FluxMatrix_Full.rows(), SenseSmearingLimit, SSLpb);
+    RecoFluxMatrix = TrueSensingMatrix * FluxMatrix_Full; 
+
+    if (SmearRecoFlux) {
+      std::cout << "Smear Reco Fluxes" << std::endl;
+      SmearedRecoFluxMatrix = SmearMatrix(RecoFluxMatrix, NoiseSmearingLimit);
+      std::cout << " --- Smeared Reco Fluxes --- " << std::endl;
+      // std::cout << SmearedRecoFluxMatrix.format(CleanFmt) << std::endl;
+    } else {
+      SmearedRecoFluxMatrix = RecoFluxMatrix;
+    }
+
+    Eigen::MatrixXd RebinnedSmearedRecoFluxMatrix = MatrixRebinRows(SmearedRecoFluxMatrix, Ebins);
+    std::cout << " --- Rebin 1 : Reco Fluxes --- " << std::endl;
+    // std::cout << RebinnedSmearedRecoFluxMatrix.format(CleanFmt) << std::endl; 
+    Eigen::MatrixXd SquareSmearedRecoFluxMatrix = MatrixRebinCols(RebinnedSmearedRecoFluxMatrix, Ebins);
+    std::cout << " --- Rebin 2 : Reco Fluxes --- " << std::endl;
+    // std::cout << SquareSmearedRecoFluxMatrix.format(CleanFmt) << std::endl; 
+
+    // ComputeMatrix(SquareTrueFluxMatrix, SquareSmearedRecoFluxMatrix);
+    // std::cout << "RebinnedSmearedRecoFluxMatrix.cols() : " << RebinnedSmearedRecoFluxMatrix.cols() << std::endl;
+
+    Eigen::MatrixXd RebinnedTrueFluxMatrix = MatrixRebinRows(FluxMatrix_Full, Ebins);
+    std::cout << " --- Rebin 1 : True Fluxes --- " << std::endl;
+    // std::cout << RebinnedTrueFluxMatrix.format(CleanFmt) << std::endl; 
+    Eigen::MatrixXd aSquareTrueFluxMatrix = MatrixRebinCols(RebinnedTrueFluxMatrix, Ebins);
+    std::cout << " --- Rebin 2 : True Fluxes --- " << std::endl;
+
+
+    // Set negative values to positive small values & fit with remaining dataset 
 
     // Fit sensing matrix with TrueFluxMatrix - set to square starting mats
     // Eigen::MatrixXd fittedSensingMatrix = fitSensingMatrix(SquareTrueFluxMatrix, SquareSmearedRecoFluxMatrix);
 
     // Fit sensing matrix with TrueFluxMatrix : rebin rows to get Ebins as required 
-    Eigen::MatrixXd fittedSensingMatrix = fitSensingMatrix( MatrixRebinRows(TrueFluxMatrix, Ebins), RebinnedSmearedRecoFluxMatrix, true);
+    // Eigen::MatrixXd fittedSensingMatrix = fitSensingMatrix( MatrixRebinRows(TrueFluxMatrix, Ebins), RebinnedSmearedRecoFluxMatrix, true); // This one works well but takes awhile to run
 
     // Fit sensing matrix with FluxMatrix_Full - all fluxes
+    // Eigen::MatrixXd fittedSensingMatrix = fitSensingMatrix(FluxMatrix_Full, (TrueSensingMatrix*FluxMatrix_Full) ); // untested - binning probably wrong
+
+    // reg_param = 0.001;
+    double res_norm = 0;
+    double soln_norm = 0;
+    std::cout << "TrueFluxMatrix.rows() : " << TrueFluxMatrix.rows() << std::endl;
+    std::cout << "Ebins : " << Ebins << std::endl;
+    // Eigen::MatrixXd fittedSensingMatrix = SolveSensingMatrix( RebinnedTrueFluxMatrix, RebinnedSmearedRecoFluxMatrix, reg_param, res_norm, soln_norm);
+    
+    bool iterativesolve = false; // should replace with fParams.iterativesolve..
+    if (iterativesolve) {
+
+      int nsteps = 30;
+      double CSNorm = -3;
+      double StabilityFactor=-3;
+      // looking at coeff removal below coefflim size
+      // TGraph coeffs(nsteps);
+      int ncoeffs = pow(Ebins, 2);
+      std::cout << "ncoeffs : " << ncoeffs << std::endl;
+      TH2D *CoeffChange =
+         new TH2D("CoeffChange2D", "Coeff Change with steps", ncoeffs, 0, ncoeffs, nsteps+1, 0, nsteps+1);
+      TH2D *WeightChange =
+         new TH2D("WeightChange2D", "Weighting Change with steps", ncoeffs, 0, ncoeffs, nsteps+1, 0, nsteps+1);
+  
+      double reg_exp = 1E-5;
+      std::vector<double> omega;
+
+      Eigen::MatrixXd fittedSensingMatrix;
+  
+      std::vector<double> eta_hat, rho_hat;
+      for (size_t l_it = 0; l_it < nsteps; ++l_it) {
+  
+        fittedSensingMatrix = IterativeSolveSensingMatrix( aSquareTrueFluxMatrix, SquareSmearedRecoFluxMatrix, pow(10, reg_exp), res_norm, soln_norm, omega);
+        std::cout << "soln_norm : " << soln_norm << std::endl;
+        std::cout << "res_norm : " << res_norm << std::endl;
+        eta_hat.push_back(log(soln_norm));
+        rho_hat.push_back(log(res_norm));
+  
+  
+        // std::cout << "\n --------------- Solve Coeffs --------------- " << std::endl;
+        double largecoeffs = 0;
+        double coeffsum = 0;
+
+        for (size_t i = 0; i < omega.size(); i++) {
+          // std::cout << omega[i] << std::endl;
+          CoeffChange->SetBinContent( i+1, l_it+1, omega[i]);
+        }
+  
+        int w_it = 0;
+        if ( l_it != (nsteps - 1) ) { // Skip last reweight to do filtering
+          for (double &weight : omega) {
+            weight = std::abs( pow(10, CSNorm) /((pow(10,-CSNorm)*weight) + pow(10,StabilityFactor)) );
+            // weight = std::abs( pow(10, reg_exp) /((pow(10,-reg_exp)*weight) + pow(10,StabilityFactor)) );
+            WeightChange->SetBinContent( w_it+1, l_it+1, weight);
+            w_it++;
+          }
+        }
+      }
+  
+      std::cout << " --- Fitted Sensing Matrix --- " << std::endl;
+      std::cout << fittedSensingMatrix.format(CleanFmt) << std::endl;
+      std::cout << " --- Rebinned True Sensing Matrix --- " << std::endl;
+      std::cout << MatrixRebinRows( MatrixRebinCols(TrueSensingMatrix, Ebins, false), Ebins, true).format(CleanFmt) << std::endl;
+      std::cout << "Frob Norm of (Mat * Etrue) - Ereco : " << FrobeniusNorm((fittedSensingMatrix * aSquareTrueFluxMatrix) - SquareSmearedRecoFluxMatrix) << std::endl;
+
+      TFile *f = CheckOpenFile(OutputFile, "RECREATE");
+      if ( FDFluxVector.size() ) {
+        Eigen::VectorXd FDRecoVector = TrueSensingMatrix*FDFluxVector;
+        std::cout << " Applying low-rank sensing matrix to FD Reco Vector " << std::endl;
+        Eigen::VectorXd FDRestoredVector = applyLowRankSensingMatrix( fittedSensingMatrix.inverse(), FDRecoVector);
+
+        WriteVector(f, FDFluxVector.size(), FDFluxVector, "FDTrueVector", FDFluxOriginal.get());
+        WriteVector(f, FDRecoVector.size(), FDRecoVector, "FDRecoVector", FDFluxOriginal.get());
+        WriteVector(f, FDRestoredVector.size(), FDRestoredVector, "FDRestoredVector", FDFluxOriginal.get());
+
+        FDFluxOriginal->SetName("FDFluxOriginal");
+        FDFluxOriginal->Write();
+
+        CoeffChange->Write();
+        WeightChange->Write();
+      }
+
+      f->Close();
+      std::cin.ignore();
+      return;
+
+    }
+
+    // v lcurve solver
+    bool curvesolve = false; // should replace with fParams..
+    if (curvesolve) {
+      double start = -6;
+      double end = 1;
+      int nsteps = 6000;
+      TGraph lcurve(nsteps);
+      TGraph kcurve(nsteps);
+      double step = double(end - start) / double(nsteps);
+      std::vector<double> eta_hat, rho_hat;
+      for (size_t l_it = 0; l_it < nsteps; ++l_it) {
+        std::cout << "\n\n ------ Step : " << l_it << " ------ " << std::endl;
+        double reg_exp = start + double(l_it) * step;
+        // Passed parameter is regularization factor, should scan for the best one,
+        // double soln_norm, res_norm;
+        // fls.Solve(pow(10, reg_exp), BCRegFactor, res_norm, soln_norm);
+        Eigen::MatrixXd fittedSensingMatrix = SolveSensingMatrix( aSquareTrueFluxMatrix, SquareSmearedRecoFluxMatrix, pow(10, reg_exp), res_norm, soln_norm);
+        std::cout << "soln_norm : " << soln_norm << std::endl;
+        std::cout << "res_norm : " << res_norm << std::endl;
+        eta_hat.push_back(log(soln_norm));
+        rho_hat.push_back(log(res_norm));
+  
+        lcurve.SetPoint(l_it, rho_hat.back() / 2.0, eta_hat.back() / 2.0);
+      }
+  
+      double max_curv = -std::numeric_limits<double>::max();
+      double best_reg;
+      for (size_t l_it = 4; l_it < (nsteps - 4); ++l_it) {
+        double curv =
+            2.0 *
+            (deriv(&rho_hat[l_it], step) * second_deriv(&eta_hat[l_it], step) -
+             deriv(&eta_hat[l_it], step) * second_deriv(&rho_hat[l_it], step)) /
+            pow(pow(deriv(&rho_hat[l_it], step), 2) +
+                    pow(deriv(&eta_hat[l_it], step), 2),
+                3 / 2);
+        kcurve.SetPoint(l_it - 4, start + double(l_it) * step, curv);
+
+        if (curv > max_curv) {
+          max_curv = curv;
+          best_reg = pow(10, start + double(l_it) * step);
+        }
+      }
+
+      Eigen::MatrixXd fittedSensingMatrix = SolveSensingMatrix( aSquareTrueFluxMatrix, SquareSmearedRecoFluxMatrix, best_reg, res_norm, soln_norm);
+
+      std::cout << " --- Fitted Sensing Matrix --- " << std::endl;
+      std::cout << fittedSensingMatrix.format(CleanFmt) << std::endl;
+      std::cout << " --- Rebinned True Sensing Matrix --- " << std::endl;
+      std::cout << MatrixRebinRows( MatrixRebinCols(TrueSensingMatrix, Ebins, false), Ebins, true).format(CleanFmt) << std::endl;
+      std::cout << "Frob Norm of (Mat * Etrue) - Ereco : " << FrobeniusNorm((fittedSensingMatrix * aSquareTrueFluxMatrix) - SquareSmearedRecoFluxMatrix) << std::endl;
+
+      TFile *f = CheckOpenFile(OutputFile, "RECREATE");
+      if ( FDFluxVector.size() ) {
+        Eigen::VectorXd FDRecoVector = TrueSensingMatrix*FDFluxVector;
+        std::cout << " Applying low-rank sensing matrix to FD Reco Vector " << std::endl;
+        Eigen::VectorXd FDRestoredVector = applyLowRankSensingMatrix( fittedSensingMatrix.inverse(), FDRecoVector);
+
+        WriteVector(f, FDFluxVector.size(), FDFluxVector, "FDTrueVector", FDFluxOriginal.get());
+        WriteVector(f, FDRecoVector.size(), FDRecoVector, "FDRecoVector", FDFluxOriginal.get());
+        WriteVector(f, FDRestoredVector.size(), FDRestoredVector, "FDRestoredVector", FDFluxOriginal.get());
+
+        FDFluxOriginal->SetName("FDFluxOriginal");
+        FDFluxOriginal->Write();
+
+	lcurve.Write("lcurve");
+	kcurve.Write("kcurve");
+      }
+
+      f->Close();
+      std::cin.ignore();
+      return;
+    }
+
+
+
+    // v normal solver
+    Eigen::MatrixXd fittedSensingMatrix = SolveSensingMatrix( aSquareTrueFluxMatrix, SquareSmearedRecoFluxMatrix, reg_param, res_norm, soln_norm);
+
     std::cout << TrueSensingMatrix.cols() << "," << TrueSensingMatrix.rows() << std::endl;
     std::cout << FluxMatrix_Full.cols() << "," << FluxMatrix_Full.rows() << std::endl;
-    // Eigen::MatrixXd fittedSensingMatrix = fitSensingMatrix(TrueFluxMatrix, (TrueSensingMatrix*TrueFluxMatrix) );
-
     /*
-    // Set negative values to positive small values & fit with remaining dataset 
     Eigen::MatrixXd TrueToyFluxMatrix = LoadToyFluxes(Ebins, NFluxes);
     Eigen::MatrixXd RecoToyFluxMatrix = TrueSensingMatrix * TrueToyFluxMatrix;
 
@@ -746,6 +1038,7 @@ public:
     std::cout << fittedSensingMatrix.format(CleanFmt) << std::endl;
     std::cout << " --- Rebinned True Sensing Matrix --- " << std::endl;
     std::cout << MatrixRebinRows( MatrixRebinCols(TrueSensingMatrix, Ebins, false), Ebins, true).format(CleanFmt) << std::endl;
+    std::cout << "Frob Norm of (Mat * Etrue) - Ereco : " << FrobeniusNorm((fittedSensingMatrix * aSquareTrueFluxMatrix) - SquareSmearedRecoFluxMatrix) << std::endl;
     //////////////// Eigen::MatrixXd ScaledUpFittedSensingMatrixInv = scaleUpSensingMatrix(fittedSensingMatrix.inverse(), FluxMatrix_Full.rows());
     /*Eigen::MatrixXd ScaledUpFittedSensingMatrix = scaleUpSensingMatrix(fittedSensingMatrix, FluxMatrix_Full.rows());
     std::cout << " --- Scaled Up Fitted Sensing Matrix --- " << std::endl;
@@ -758,8 +1051,6 @@ public:
 
     // std::cout << " --- True Sensing Matrix --- " << std::endl;
     // std::cout << TrueSensingMatrix.format(CleanFmt) << std::endl;
-
-    
     
     // Compare With Toys
     /*
@@ -908,7 +1199,7 @@ public:
 
     Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
     std::cout << " --- True Sensing Matrix --- " << std::endl; 
-    std::cout << TrueSensingMatrix.format(CleanFmt) << std::endl; 
+    // std::cout << TrueSensingMatrix.format(CleanFmt) << std::endl; 
   }
 
   Eigen::MatrixXd LoadToyFluxes(int nEbins, int NFluxes) {
@@ -1108,111 +1399,371 @@ public:
     return SmearedMatrix;
   }
 
-  /*Eigen::MatrixXd SolveSensingMatrix( const Eigen::MatrixXd &aTrueFluxMat, const Eigen::MatrixXd &aRecoFluxMat, double reg_param, double &res_norm, double &soln_norm bool guidematrix = false ) {
+  std::pair<Eigen::MatrixXd, Eigen::VectorXd> constructLLS( const Eigen::MatrixXd &aTrueFluxMat, const Eigen::MatrixXd &aRecoFluxMat) {
+    int Ebins = aTrueFluxMat.rows();
+
+    Eigen::MatrixXd iFluxes = aRecoFluxMat.inverse();
+    // Eigen::MatrixXd iFluxes = aRecoFluxMat;
+    int matcols = (aTrueFluxMat.rows())*(aTrueFluxMat.rows());
+    // int matrows = aTrueFluxMat.cols();
+    int matrows = matcols;
+    std::cout << "matcols : " << matcols << std::endl;
+    std::cout << "matrows : " << matrows << std::endl;
+    Eigen::MatrixXd LLSmat = Eigen::MatrixXd(matrows, matcols ); // rows/cols in reverse (weird) order 
+
+    int newrowcounter = 0;
+    for (int row_it = 0; row_it < aTrueFluxMat.cols(); row_it++) {
+      for (int col_it = 0; col_it < aTrueFluxMat.rows(); col_it++) {
+	int acounter = 0;
+        for (int row_it2 = 0; row_it2 < aTrueFluxMat.cols(); row_it2++) {
+          for (int col_it2 = 0; col_it2 < aTrueFluxMat.rows(); col_it2++) {
+	    // std::cout << acounter << std::endl;
+	    // std::cout << "i(row_it, col_it2)*j(row_it2, col_it) : i(" <<row_it<< ","<<col_it2<<")*j("<<row_it2<<","<<col_it<<")"<< std::endl;
+	    LLSmat(newrowcounter, acounter ) = (iFluxes(row_it, col_it2)*aTrueFluxMat(row_it2, col_it)); // col_it2 leads assignment
+	    acounter++;
+          }
+        }
+	newrowcounter++;
+      }
+    }
+
+    Eigen::VectorXd LLSvec = Eigen::VectorXd( matcols );
+    // Eigen::VectorXd LLSvec = Eigen::VectorXd( aTrueFluxMat.rows() );
+
+    /*for (int col_it = 0; col_it < aTrueFluxMat.rows(); col_it++) {
+      for (int col_it2 = 0; col_it2 < aTrueFluxMat.rows(); col_it2++) {
+	LLSvec((col_it*aTrueFluxMat.rows())+col_it2) = 1;
+      }
+    }*/
+
+    int rcounter = 0;
+    int ccounter = 0;
+    // for (int row_it = 0; row_it < aTrueFluxMat.rows(); row_it++) {
+    // }
+    for (int row_it = 0; row_it < matcols; row_it++) {
+	if (rcounter == ccounter) { 
+	  LLSvec(row_it) = 1;
+	} else {
+	  LLSvec(row_it) = 0;
+	}
+	if (ccounter < (Ebins-1)) {
+	  ccounter++;
+	} else {
+	  ccounter = 0;
+	  rcounter++;
+	}
+    }
+
+    return std::make_pair(LLSmat, LLSvec);
+  }
+
+  Eigen::MatrixXd deconstructLLS( const Eigen::VectorXd &SensingVector, int Ebins ) {
+
+    Eigen::MatrixXd theMat = Eigen::MatrixXd( Ebins, Ebins);
+
+    for (int col_it = 0; col_it < Ebins; col_it++) {
+      for (int row_it = 0; row_it < Ebins; row_it++) {
+	int v_it = (col_it*Ebins)+row_it;
+	// std::cout << "v_it : " << v_it << std::endl;
+	// std::cout << "(row_it, col_it) : (" << row_it <<","<<col_it<<")"<< std::endl;
+	theMat(row_it, col_it) = SensingVector(v_it);
+	// LLSmat(row_it, (col_it*aTrueFluxMat.rows())+col_it2) = iFluxes(col_it, row_it)*aTrueFluxMat(col_it2, row_it); // col_it2 leads assignment
+      }
+    }
+
+    /*for (int row_it = 0; row_it < Ebins; row_it++) {
+      for (int col_it = 0; col_it < Ebins; col_it++) {
+	int v_it = (row_it*Ebins)+col_it;
+	theMat(row_it, col_it) = SensingVector(v_it);
+	// LLSmat(row_it, (col_it*aTrueFluxMat.rows())+col_it2) = iFluxes(col_it, row_it)*aTrueFluxMat(col_it2, row_it); // col_it2 leads assignment
+      }
+    }*/
+
+    return theMat; 
+  }
+
+  Eigen::MatrixXd SolveSensingMatrix( const Eigen::MatrixXd &aTrueFluxMat, const Eigen::MatrixXd &aRecoFluxMat, double reg_param, double &res_norm, double &soln_norm, bool guidematrix = false ) {
   // Eigen::VectorXd runSolver(double reg_param, double &res_norm, double &soln_norm) {
   // }
+    int Ebins = aTrueFluxMat.rows();
+
+    std::pair<Eigen::MatrixXd, Eigen::VectorXd> LLSout = constructLLS( aTrueFluxMat, aRecoFluxMat);
+    Eigen::MatrixXd LLSoutmat = LLSout.first;
+    Eigen::VectorXd LLSvec = LLSout.second;
+    std::cout << "LLSmat.rows() : " << LLSoutmat.rows() << std::endl;
+    std::cout << "LLSmat.cols() : " << LLSoutmat.cols() << std::endl;
+    std::cout << "LLSvec.size() : " << LLSvec.size() << std::endl;
+    Eigen::VectorXd SensingVector = Eigen::VectorXd::Zero(Ebins);
 
     bool use_reg = reg_param > 0;
-    size_t NFluxes = FluxMatrix_Solve.cols();
-    size_t NEqs = FluxMatrix_Solve.rows();
+    // size_t NFluxes = LLSoutmat.cols();
+    // size_t NEqs = LLSmat.rows();
+    // size_t NBins = NEqs - NFluxes;
+
+    Eigen::MatrixXd LLSmat;
+
+    bool EnforceSize = true; // should replace with fParams...
+    if (EnforceSize) {
+      int rowN = LLSoutmat.rows();
+      LLSoutmat.conservativeResize(rowN+1, LLSoutmat.cols());
+      int newrowN = rowN+1; 
+      for (int col_it = 0; col_it < LLSoutmat.cols(); col_it++) {
+        LLSoutmat(rowN, col_it) = 1; 
+      }
+
+      double forcedSize = std::sqrt(rowN);
+      LLSvec.conservativeResize(rowN+1);
+      // LLSvec(rowN) = rowN;
+      LLSvec(rowN) = forcedSize;
+    }
+
+
+    if (use_reg) {
+      std::cout << "Using regularised solver" << std::endl;
+      int fluxbins = LLSoutmat.rows();
+      // int newmatrows = LLSoutmat.rows()+LLSvec.size();
+      // int newmatrows = LLSoutmat.rows()+LLSoutmat.cols();
+      LLSmat = Eigen::MatrixXd::Zero(LLSoutmat.rows()+LLSvec.size(), LLSoutmat.cols());
+      LLSmat.block(0, 0, LLSoutmat.rows(), LLSoutmat.cols()) = LLSoutmat;
+      for (int r_iter = 0; r_iter < LLSvec.size(); r_iter++) {
+        LLSmat(r_iter + fluxbins, r_iter) = reg_param;
+      }
+    } else {
+      LLSmat = LLSoutmat;
+    }
+
+    SensingVector = runSolver(LLSmat, LLSvec, reg_param, res_norm, soln_norm);
+
+    Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
+    // std::cout << " --- Sensing Vector --- " << std::endl;
+    // std::cout << SensingVector.format(CleanFmt) << std::endl;
+    // std::cout << " --- LLSmat --- " << std::endl;
+    // std::cout << LLSmat.format(CleanFmt) << std::endl;
+    // std::cout << " --- LLSvec --- " << std::endl;
+    // std::cout << LLSvec.format(CleanFmt) << std::endl;
+    std::cout << " --- aTrueFluxMat --- " << std::endl;
+    std::cout << aTrueFluxMat.format(CleanFmt) << std::endl;
+    std::cout << " --- aRecoFluxMat --- " << std::endl;
+    std::cout << aRecoFluxMat.format(CleanFmt) << std::endl;
+
+    Eigen::MatrixXd aSensingMat = deconstructLLS(SensingVector, Ebins);
+    return aSensingMat;
+  }
+
+  Eigen::MatrixXd IterativeSolveSensingMatrix( const Eigen::MatrixXd &aTrueFluxMat, const Eigen::MatrixXd &aRecoFluxMat, double reg_param, double &res_norm, double &soln_norm, std::vector<double> &omega, bool guidematrix = false ) {
+  // Eigen::VectorXd runSolver(double reg_param, double &res_norm, double &soln_norm) {
+  // }
+    int Ebins = aTrueFluxMat.rows();
+
+    std::pair<Eigen::MatrixXd, Eigen::VectorXd> LLSout = constructLLS( aTrueFluxMat, aRecoFluxMat);
+    Eigen::MatrixXd LLSoutmat = LLSout.first;
+    Eigen::VectorXd LLSvec = LLSout.second;
+    std::cout << "LLSmat.rows() : " << LLSoutmat.rows() << std::endl;
+    std::cout << "LLSmat.cols() : " << LLSoutmat.cols() << std::endl;
+    std::cout << "LLSvec.size() : " << LLSvec.size() << std::endl;
+    Eigen::VectorXd SensingVector = Eigen::VectorXd::Zero(Ebins);
+
+    bool use_reg = reg_param > 0;
+    size_t NFluxes = LLSoutmat.cols();
+    // size_t NFluxes = FluxMatrix_Solve.cols();
+    // size_t NEqs = FluxMatrix_Solve.rows();
+    // size_t NBins = NEqs - NFluxes;
+    
+    Eigen::MatrixXd LLSmat;
+
+    if (omega.size() == 0) {
+      omega.assign(NFluxes, reg_param);
+      /*if ( fParams.startCSequalreg ) {
+        omega.assign(NFluxes, reg_param);
+      } else {
+        omega.assign(NFluxes, 1);
+      }*/
+    }
+
+    if (use_reg) {
+      std::cout << "Using iterative reweighting regularised solver" << std::endl;
+      int fluxbins = LLSoutmat.rows();
+      // int newmatrows = LLSoutmat.rows()+LLSvec.size();
+      // int newmatrows = LLSoutmat.rows()+LLSoutmat.cols();
+      LLSmat = Eigen::MatrixXd::Zero(LLSoutmat.rows()+LLSvec.size(), LLSoutmat.cols());
+      LLSmat.block(0, 0, LLSoutmat.rows(), LLSoutmat.cols()) = LLSoutmat;
+      for (int r_iter = 0; r_iter < LLSvec.size(); r_iter++) {
+        LLSmat(r_iter + fluxbins, r_iter) = omega[r_iter];
+      }
+    } else {
+      LLSmat = LLSoutmat;
+    }
+
+    SensingVector = runSolver(LLSmat, LLSvec, reg_param, res_norm, soln_norm);
+
+    Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
+    // std::cout << " --- Sensing Vector --- " << std::endl;
+    // std::cout << SensingVector.format(CleanFmt) << std::endl;
+    // std::cout << " --- LLSmat --- " << std::endl;
+    // std::cout << LLSmat.format(CleanFmt) << std::endl;
+    // std::cout << " --- LLSvec --- " << std::endl;
+    // std::cout << LLSvec.format(CleanFmt) << std::endl;
+    // std::cout << " --- aTrueFluxMat --- " << std::endl;
+    // std::cout << aTrueFluxMat.format(CleanFmt) << std::endl;
+    // std::cout << " --- aRecoFluxMat --- " << std::endl;
+    // std::cout << aRecoFluxMat.format(CleanFmt) << std::endl;
+
+    std::vector<double> coeffvec(SensingVector.data(), SensingVector.data() +
+                                        SensingVector.rows() * SensingVector.cols());
+    omega = coeffvec;
+
+    Eigen::MatrixXd aSensingMat = deconstructLLS(SensingVector, Ebins);
+    return aSensingMat;
+  }
+
+
+
+  Eigen::VectorXd runSolver(Eigen::MatrixXd LLSmat, Eigen::VectorXd LLSvec, double reg_param, double &res_norm, double &soln_norm) {
+    bool use_reg = reg_param > 0;
+    size_t NFluxes = LLSmat.cols();
+    size_t NEqs = LLSmat.rows();
     size_t NBins = NEqs - NFluxes;
+
+    Eigen::VectorXd SensingVector;
+
+    std::cout << "NFluxes : " << NFluxes << std::endl;
+    std::cout << "NEqs : " << NEqs << std::endl;
+    std::cout << "NBins : " << NBins << std::endl;
+    std::cout << "LLSvec.size() : " << LLSvec.size() << std::endl;
 
     switch (fParams.algo_id) {
     case Params::kSVD: {
-      if (use_reg) {
-        last_solution =
-            FluxMatrix_Reduced.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)
-                .solve(Target);
-      } else {
-        last_solution = FluxMatrix_Reduced.topRows(NBins)
+      // if (use_reg) {
+        SensingVector =
+            LLSmat.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)
+                .solve(LLSvec);
+      /*} else {
+        SensingVector = LLSmat.topRows(NBins)
                             .bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV)
-                            .solve(Target.topRows(NBins));
-      }
+                            .solve(LLSvec.topRows(NBins));
+      }*/
       break;
     }
     case Params::kQR: {
-      if (use_reg) {
-        last_solution = FluxMatrix_Reduced.colPivHouseholderQr().solve(Target);
-      } else {
-        last_solution =
-            FluxMatrix_Reduced.topRows(NBins).colPivHouseholderQr().solve(
-                Target.topRows(NBins));
-      }
+      // if (use_reg) {
+        SensingVector = LLSmat.colPivHouseholderQr().solve(LLSvec);
+      /*} else {
+        SensingVector =
+            LLSmat.topRows(NBins).colPivHouseholderQr().solve(
+                LLSvec.topRows(NBins));
+      }*/
       break;
     }
     case Params::kNormal: {
-      if (use_reg) {
-        last_solution = (FluxMatrix_Reduced.transpose() * FluxMatrix_Reduced)
+      // if (use_reg) {
+        SensingVector = (LLSmat.transpose() * LLSmat)
                             .ldlt()
-                            .solve(FluxMatrix_Reduced.transpose() * Target);
-      } else {
-        last_solution = (FluxMatrix_Reduced.transpose() * FluxMatrix_Reduced)
+                            .solve(LLSmat.transpose() * LLSvec);
+      /*} else {
+        SensingVector = (LLSmat.transpose() * LLSmat)
                             .topRows(NBins)
                             .ldlt()
-                            .solve(FluxMatrix_Reduced.topRows(NBins).transpose() *
-                                   Target.topRows(NBins));
-      }
+                            .solve(LLSmat.topRows(NBins).transpose() *
+                                   LLSvec.topRows(NBins));
+      }*/
       break;
     }
     case Params::kInverse: {
       if (use_reg) {
-        last_solution = ((FluxMatrix_Reduced.topRows(NBins).transpose() *
-                          FluxMatrix_Reduced.topRows(NBins)) +
-                         FluxMatrix_Reduced.bottomRows(NFluxes).transpose() *
-                             FluxMatrix_Reduced.bottomRows(NFluxes))
+        std::cout << "Inverse solve" << std::endl;
+        SensingVector = ((LLSmat.topRows(NBins).transpose() *
+                          LLSmat.topRows(NBins)) +
+                         LLSmat.bottomRows(NFluxes).transpose() *
+                             LLSmat.bottomRows(NFluxes))
                             .inverse() *
-                        FluxMatrix_Reduced.topRows(NBins).transpose() *
-                        Target.topRows(NBins);
+                        LLSmat.topRows(NBins).transpose() *
+                        LLSvec.topRows(NBins);
       } else {
-        last_solution = (FluxMatrix_Reduced.topRows(NBins).transpose() *
-                         FluxMatrix_Reduced.topRows(NBins))
+        SensingVector = (LLSmat.transpose() *
+                         LLSmat)
                             .inverse() *
-                        FluxMatrix_Reduced.topRows(NBins).transpose() *
-                        Target.topRows(NBins);
+                        LLSmat.transpose() *
+                        LLSvec;
       }
       break;
     }
     case Params::kCOD: {
+      // if (use_reg) {
+        SensingVector = LLSmat.completeOrthogonalDecomposition().solve(LLSvec);
+      /*} else {
+        SensingVector =
+            LLSmat.topRows(NBins).completeOrthogonalDecomposition().solve(
+                LLSvec.topRows(NBins));
+      }*/
+      break;
+    }
+    case Params::kConjugateGradient: {
+      // SparseMatrix<double> = LLSmat; // setting to sparsematrix - may not work - probably not optimal for runtimes
+      // BiCGSTAB<SparseMatrix<double> > solver; // template
+      //BiCGSTAB<Eigen::MatrixXd> solver; // 
+      // ConjugateGradient<Eigen::MatrixXd>, Lower|Upper solver;
+      // Eigen::ConjugateGradient<Eigen::MatrixXd, Lower|Upper> solver;
+
+      Eigen::ConjugateGradient<Eigen::MatrixXd, Eigen::Lower|Eigen::Upper> solver;
+      std::cout << "ConjugateGradient solve" << std::endl;
       if (use_reg) {
-        last_solution = FluxMatrix_Reduced.completeOrthogonalDecomposition().solve(Target);
+        solver.compute((LLSmat.topRows(NBins).transpose() *
+                        LLSmat.topRows(NBins)) +
+                        LLSmat.bottomRows(NFluxes).transpose() *
+                        LLSmat.bottomRows(NFluxes));
+
+        SensingVector = solver.solve(LLSmat.topRows(NBins).transpose() *
+                                     LLSvec.topRows(NBins));
+        std::cout << "#iterations:     " << solver.iterations() << std::endl;
+        std::cout << "estimated error: " << solver.error()      << std::endl;
       } else {
-        last_solution =
-            FluxMatrix_Reduced.topRows(NBins).completeOrthogonalDecomposition().solve(
-                Target.topRows(NBins));
+        solver.compute(LLSmat.transpose() *
+                        LLSmat);
+
+        SensingVector = solver.solve(LLSmat.transpose() *
+                        LLSvec);
+        std::cout << "#iterations:     " << solver.iterations() << std::endl;
+        std::cout << "estimated error: " << solver.error()      << std::endl;
       }
       break;
     }
     }
-    if (!last_solution.rows()) {
+    if (!SensingVector.rows()) {
       res_norm = 0;
       soln_norm = 0;
-      return last_solution;
+      return SensingVector;
     }
 
-    res_norm = ((FluxMatrix_Reduced.topRows(NBins) * last_solution) -
-                Target.topRows(NBins))
+    if (use_reg) {
+      res_norm = ((LLSmat.topRows(NBins) * SensingVector) -
+                   LLSvec.topRows(NBins))
                    .squaredNorm();
+    } else {
+      res_norm = ((LLSmat * SensingVector) -
+                   LLSvec)
+                   .squaredNorm();
+    }
     soln_norm = 0;
     if (reg_param > 0) {
       soln_norm =
-          (FluxMatrix_Reduced.bottomRows(NFluxes) * last_solution / reg_param)
+          (LLSmat.bottomRows(NFluxes) * SensingVector / reg_param)
               .squaredNorm();
     }
 
     if ( isnan(res_norm) ) {
         std::cerr << "[ERROR] : NaN res norm found. " << std::endl;
-        std::cerr << last_solution << std::endl;
+        std::cerr << SensingVector << std::endl;
         std::exit(EXIT_FAILURE);
     }
 
     if ( isnan(soln_norm) ) {
         std::cerr << "[ERROR] : NaN soln norm found. " << std::endl;
-        std::cerr << last_solution << std::endl;
+        std::cerr << SensingVector << std::endl;
         std::exit(EXIT_FAILURE);
     }
 
-    return last_solution;
-  }*/
+    return SensingVector;
+  }
 
   Eigen::MatrixXd fitSensingMatrix( const Eigen::MatrixXd &aTrueFluxMat, const Eigen::MatrixXd &aRecoFluxMat, bool guidematrix = false ) {
     int Ebins = 0;
