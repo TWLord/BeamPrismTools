@@ -748,6 +748,12 @@ public:
       WriteVector(f, FDRecoVector.size(), FDRecoVector, "FDRecoVector", FDFluxOriginal.get());
       WriteVector(f, FDRestoredVector.size(), FDRestoredVector, "FDRestoredVector", FDFluxOriginal.get());
 
+      WriteMatrix2D(f, TrueSensingMatrix.cols(), TrueSensingMatrix.rows(), TrueSensingMatrix, "TrueSensingMatrix");  
+      WriteMatrix2D(f, fittedSensingMatrix.cols(), fittedSensingMatrix.rows(), fittedSensingMatrix, "fittedSensingMatrix");  
+
+      Eigen::MatrixXd TrueSMrebin = MatrixRebinRows( MatrixRebinCols(TrueSensingMatrix, Ebins, false), Ebins, true);
+      WriteMatrix2D(f, TrueSMrebin.cols(), TrueSMrebin.rows(), TrueSMrebin, "TrueSMrebin");  
+
       FDFluxOriginal->SetName("FDFluxOriginal");
       FDFluxOriginal->Write();
     }
@@ -1018,8 +1024,6 @@ public:
       return;
     }
 
-
-
     // v normal solver
     Eigen::MatrixXd fittedSensingMatrix = SolveSensingMatrix( aSquareTrueFluxMatrix, SquareSmearedRecoFluxMatrix, reg_param, res_norm, soln_norm);
 
@@ -1090,6 +1094,12 @@ public:
       WriteVector(f, FDFluxVector.size(), FDFluxVector, "FDTrueVector", FDFluxOriginal.get());
       WriteVector(f, FDRecoVector.size(), FDRecoVector, "FDRecoVector", FDFluxOriginal.get());
       WriteVector(f, FDRestoredVector.size(), FDRestoredVector, "FDRestoredVector", FDFluxOriginal.get());
+
+      WriteMatrix2D(f, TrueSensingMatrix.cols(), TrueSensingMatrix.rows(), TrueSensingMatrix, "TrueSensingMatrix");  
+      WriteMatrix2D(f, fittedSensingMatrix.cols(), fittedSensingMatrix.rows(), fittedSensingMatrix, "fittedSensingMatrix");  
+
+      Eigen::MatrixXd TrueSMrebin = MatrixRebinRows( MatrixRebinCols(TrueSensingMatrix, Ebins, false), Ebins, true);
+      WriteMatrix2D(f, TrueSMrebin.cols(), TrueSMrebin.rows(), TrueSMrebin, "TrueSMrebin");  
 
       // FDFluxHist->SetDirectory(f);
       // FDFluxHist->Write();
@@ -1879,6 +1889,43 @@ public:
       aHist->SetDirectory(td);
       aHist->Write();
     }
+  }
+
+  void WriteMatrix2D(TDirectory *td, int nEbinsX, int nEbinsY, Eigen::MatrixXd aMat, TString prefix) {
+    TString hname = TString::Format("%s", prefix.Data());
+    TH2D *aHist = new TH2D (hname, hname, nEbinsX, 0.0, 10.0, nEbinsY, 0.0, 10.0);
+
+    std::cout << "Filling histogram with " << aHist->GetXaxis()->GetNbins() 
+              << " bins from matrix with " << aMat.rows() << " rows and " 
+              << aMat.cols() << " cols."
+              << std::endl;
+    // size_t idx = 0;
+    // for (Int_t x_it = bin_offset; x_it < aHist->GetXaxis()->GetNbins(); ++x_it) {
+    /*double v = (idx >= vals.rows()) ? 0 : vals(idx);
+        aHist->SetBinContent(x_it + 1, v);
+        aHist->SetBinError(x_it + 1, 0);
+        idx++;*/
+    // }
+    for (int row_it = 0; row_it < aMat.rows(); row_it++) {
+      for (int col_it = 0; col_it < aMat.cols(); col_it++) {
+        aHist->SetBinContent(col_it+1, row_it+1, aMat(row_it, col_it) );
+        aHist->SetBinError(col_it+1, row_it+1, 0);
+      }
+    }
+    aHist->SetDirectory(td);
+    aHist->Write();
+
+    // Reset flow bins
+    aHist->ClearUnderflowAndOverflow();
+    // Below - 1D case :
+    /*aHist->SetBinContent(0, 0);
+    aHist->SetBinError(0, 0);
+    aHist->SetBinContent(aHist->GetXaxis()->GetNbins() + 1, 0);
+    aHist->SetBinError(aHist->GetXaxis()->GetNbins() + 1, 0);
+    aHist->SetBinContent(aHist->GetXaxis()->GetNbins() + 1, 0);
+    aHist->SetBinError(aHist->GetXaxis()->GetNbins() + 1, 0);*/
+
+    return;
   }
 
   /*void Write1Dtoy(TDirectory *td, int nEbins) {
