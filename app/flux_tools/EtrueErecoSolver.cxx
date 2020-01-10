@@ -259,6 +259,7 @@ int main(int argc, char const *argv[]) {
   // p.toyF_id = toyFid;
   // p.toyM_id = ERecoSolver::Params::mRandom;
   p.toyM_id = ERecoSolver::Params::mRandomLimited;
+  p.toyM_id = ERecoSolver::Params::mGauss;
   p.toyF_id = ERecoSolver::Params::fRandom;
   // p.smear_id = ERecoSolver::Params::sRandom;
   p.smear_id = ERecoSolver::Params::sGauss;
@@ -282,13 +283,16 @@ int main(int argc, char const *argv[]) {
   // double SmearingLimit = 0.00;
   // double SmearingLimit = 0.01;
 
+  bool testLowDim = true;
   bool doFit = true;
   bool doSquareSolve = false;
 
   double reg_param = BCRegFactor;
 
   if (NDFile.size() && NDHists.size()) {
-    if (doFit) {
+    if (testLowDim) {
+      ers.testLowDimFit( Ebins, NFluxes, SenseSmearingLimit, SenseSmearingLimitPerBin, NoiseSmearingLimit, SmearSensingMatrix, SmearRecoFlux, OutputFile, Ebins/2);
+    } else if (doFit) {
       ers.doMatrixFitAnalysis( Ebins, NFluxes, SenseSmearingLimit, SenseSmearingLimitPerBin, NoiseSmearingLimit, SmearSensingMatrix, SmearRecoFlux, OutputFile);
     } else if (doSquareSolve) {
       ers.doMatrixMapAnalysis( Ebins, NFluxes, SenseSmearingLimit, SenseSmearingLimitPerBin, NoiseSmearingLimit, SmearSensingMatrix, SmearRecoFlux, OutputFile, reg_param);

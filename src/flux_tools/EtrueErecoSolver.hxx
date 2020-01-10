@@ -194,7 +194,8 @@ public:
     // p.algo_id = Params::kSVD;
     // p.algo_id = Params::kConjugateGradient;
     p.algo_id = Params::kInverse;
-    p.toyM_id = Params::mRandom;
+    // p.toyM_id = Params::mRandom;
+    p.toyM_id = Params::mGauss;
     p.toyF_id = Params::fRandom;
     p.smear_id = Params::sRandom;
     p.comp_id = Params::cMatrixMap;
@@ -491,7 +492,7 @@ public:
   	    if (xb > yb) {
   	      int extrabins = xb - yb;
         	      std::unique_ptr<TH2> tmpFlux2D(static_cast<TH2 *>(projectedFlux->Clone()));
-  	      int nXbins = tmpFlux2D->GetXaxis()->GetNbins();
+  	      // int nXbins = tmpFlux2D->GetXaxis()->GetNbins();
                 int MergeX = tmpFlux2D->GetXaxis()->GetNbins()/Ebins;
                 tmpFlux2D->RebinX(MergeX);
                 tmpFlux2D->Scale(1.0 / double(MergeX));
@@ -638,9 +639,49 @@ public:
     return newVec;
   }
 
+  Eigen::MatrixXd ROOTMatrixRebin(Eigen::MatrixXd aMat, int newrows, int newcols, bool rescale = true ) {
+
+    TH2D *aHist = new TH2D ("hname", "hname", aMat.rows(), 0.0, 10.0, aMat.cols(), 0.0, 10.0);
+
+    for (int row_it = 0; row_it < aMat.rows(); row_it++) {
+      for (int col_it = 0; col_it < aMat.cols(); col_it++) {
+        aHist->SetBinContent( row_it+1, col_it+1, aMat(row_it, col_it));
+      }
+    }
+
+    int MergeX = aMat.rows()/newrows;
+    int MergeY = aMat.cols()/newcols;
+    aHist->Rebin2D(MergeX, MergeY);
+    if (rescale) {
+      aHist->Scale(1.0 / double(MergeX * MergeY));
+    }
+
+    // If binning not divisible then fills a larger matrix with extra rows
+    /*Eigen::MatrixXd newMat = Eigen::MatrixXd::Zero(aHist->GetXaxis()->GetNbins(), aHist->GetYaxis()->GetNbins());
+    for (int row_it = 0; row_it < newMat.rows(); row_it++) {
+      for (int col_it = 0; col_it < newMat.cols(); col_it++) {
+        newMat(row_it, col_it) = aHist->GetBinContent( row_it+1, col_it+1 );
+      }
+    }*/
+
+    // If binning not divisible then fills to specified new matrix size but removes off last row(s)/col(s)
+    Eigen::MatrixXd newMat = Eigen::MatrixXd::Zero(newrows, newcols);
+    for (int row_it = 0; row_it < newMat.rows(); row_it++) {
+      for (int col_it = 0; col_it < newMat.cols(); col_it++) {
+        newMat(row_it, col_it) = aHist->GetBinContent( row_it+1, col_it+1 );
+      }
+    }
+
+    return newMat;
+  }
+
   Eigen::MatrixXd MatrixRebinRows(Eigen::MatrixXd aMat, int newrows, bool rescale = true ) {
     int oldrows = aMat.rows();
     int mergedrows = oldrows/newrows; 
+
+    // std::cout << "oldrows : " << oldrows << std::endl;
+    // std::cout << "newrows : " << newrows << std::endl;
+    // std::cout << "mergedrows : " << mergedrows << std::endl;
 
     Eigen::MatrixXd newMat = Eigen::MatrixXd::Zero(newrows, aMat.cols());
 
@@ -658,6 +699,7 @@ public:
 	}
 	if (rescale) {
 	  newMat(row_it, col_it) = mergedbin/mergedrows;
+	  // std::cout << "Entry for (" << row_it << "," << col_it << ") : " << newMat(row_it, col_it) << std::endl;
 	} else {
 	  newMat(row_it, col_it) = mergedbin;
 	}
@@ -696,6 +738,105 @@ public:
     return newMat;
   }
 
+  void testLowDimFit(int Ebins, int NFluxes, double SenseSmearingLimit, double SSLpb, double NoiseSmearingLimit, bool SmearSensingMatrix, bool SmearRecoFlux, std::string OutputFile, int lessEbins) {
+    Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
+    std::cout << "Running lower dimension fit test with toy fluxes" << std::endl;
+
+    // Initialising here with Ebins as higher dim binning, lessEbins lower dim binning
+    LoadToySensingMatrix(Ebins, SenseSmearingLimit, SSLpb);
+
+    RecoFluxMatrix = TrueSensingMatrix * TrueFluxMatrix; 
+
+    // Eigen::MatrixXd TrueToyFluxMatrix = LoadToyFluxes(Ebins, Ebins*2); 
+    Eigen::MatrixXd TrueToyFluxMatrix = LoadToyFluxes(Ebins, Ebins*8); 
+    Eigen::MatrixXd RecoToyFluxMatrix = TrueSensingMatrix * TrueToyFluxMatrix; 
+
+    Eigen::MatrixXd ldTrueToyFluxMatrix = MatrixRebinRows(TrueToyFluxMatrix, lessEbins);
+    Eigen::MatrixXd ldRecoToyFluxMatrix = MatrixRebinRows(RecoToyFluxMatrix, lessEbins);
+
+    // maybe consider testing MatrixRebinRows eg:
+    std::cout << "\nToy Fluxes Binned to " << lessEbins << " rows : \n"<< std::endl;
+    std::cout << ldRecoToyFluxMatrix.format(CleanFmt) << std::endl;
+
+    // Eigen::MatrixXd lldRecoToyFluxMatrix = MatrixRebinRows(ldRecoToyFluxMatrix, lessEbins/2);
+    // std::cout << "\nRebinned to " << lessEbins/2 << " rows : \n"<< std::endl;
+    // Eigen::MatrixXd lldRecoToyFluxMatrix = MatrixRebinRows(ldRecoToyFluxMatrix, 4);
+    // std::cout << "\nRebinned to " << 4 << " rows : \n"<< std::endl;
+
+    // std::cout << lldRecoToyFluxMatrix.format(CleanFmt) << std::endl;
+
+    // Eigen::MatrixXd ROOTRebin = ROOTMatrixRebin(ldRecoToyFluxMatrix, lessEbins/2, ldRecoToyFluxMatrix.cols());
+    // std::cout << "\nROOT Rebin to " << lessEbins/2 << " rows : \n"<< std::endl;
+    // Eigen::MatrixXd ROOTRebin = ROOTMatrixRebin(ldRecoToyFluxMatrix, 4, ldRecoToyFluxMatrix.cols());
+    // std::cout << "\nROOT Rebin to " << 4 << " rows : \n"<< std::endl;
+
+    // std::cout << ROOTRebin.format(CleanFmt) << std::endl;
+
+    ComputeMatrix(MatrixRebinCols(ldTrueToyFluxMatrix, lessEbins), MatrixRebinCols(ldRecoToyFluxMatrix, lessEbins));
+    Eigen::MatrixXd fittedSensingMatrix = fitSensingMatrix( ldTrueToyFluxMatrix, ldRecoToyFluxMatrix, true);
+
+    /*std::cout << " --- Fitted Sensing Matrix --- " << std::endl;
+    std::cout << fittedSensingMatrix.format(CleanFmt) << std::endl;
+    std::cout << " --- Rebinned True Sensing Matrix --- " << std::endl;
+    std::cout << MatrixRebinRows( MatrixRebinCols(TrueSensingMatrix, Ebins, false), Ebins, true).format(CleanFmt) << std::endl;*/
+    Eigen::MatrixXd ScaledUpFittedSensingMatrix = scaleUpSensingMatrix(fittedSensingMatrix, Ebins); 
+    Eigen::MatrixXd ScaledUpFittedSensingMatrixInv = scaleUpSensingMatrix(fittedSensingMatrix.inverse(), Ebins); 
+
+    TFile *f = CheckOpenFile(OutputFile, "RECREATE");
+
+    if ( FDFluxVector.size() ) {
+      // Fixing naming conventions
+      Eigen::VectorXd FDFluxVectorHD = FDFluxVector;
+      FDFluxVector = FDFluxVectorRebinned;
+      Eigen::VectorXd FDFluxVectorRebinned = VectorRebin(FDFluxVector, lessEbins, true); 
+      // Getting Recos
+      Eigen::VectorXd FDRecoVector = TrueSensingMatrix*FDFluxVector;
+      Eigen::VectorXd FDRecoVectorRebinned = VectorRebin(FDRecoVector, lessEbins, true); 
+      Eigen::VectorXd FDRestoredVectorRebinned = fittedSensingMatrix.inverse() * FDRecoVectorRebinned; 
+      std::cout << " Applying low-rank sensing matrix to FD Reco Vector " << std::endl;
+      Eigen::VectorXd FDRestoredVectorLowRank = applyLowRankSensingMatrix( fittedSensingMatrix.inverse(), FDRecoVector);
+      std::cout << " Applying scaled-up sensing matrix to FD Reco Vector " << std::endl;
+      Eigen::VectorXd FDRestoredVectorScaled = ScaledUpFittedSensingMatrix.inverse()*FDRecoVector;
+      Eigen::VectorXd FDRestoredVectorScaledInv = ScaledUpFittedSensingMatrixInv*FDRecoVector;
+
+      WriteVector(f, FDFluxVectorHD.size(), FDFluxVectorHD, "FDTrueVectorHD"); 
+      WriteVector(f, FDFluxVector.size(), FDFluxVector, "FDTrueVector");
+      WriteVector(f, FDRecoVector.size(), FDRecoVector, "FDRecoVector");
+      WriteVector(f, FDRestoredVectorLowRank.size(), FDRestoredVectorLowRank, "FDRestoredVectorLowRank");
+      WriteVector(f, FDRestoredVectorScaled.size(), FDRestoredVectorScaled, "FDRestoredVectorScaled");
+      WriteVector(f, FDRestoredVectorScaledInv.size(), FDRestoredVectorScaledInv, "FDRestoredVectorScaledInv");
+      WriteVector(f, FDFluxVectorRebinned.size(), FDFluxVectorRebinned, "FDFluxVectorRebinned" );
+      WriteVector(f, FDRecoVectorRebinned.size(), FDRecoVectorRebinned, "FDRecoVectorRebinned" );
+      WriteVector(f, FDRestoredVectorRebinned.size(), FDRestoredVectorRebinned, "FDRestoredVectorRebinned" );
+
+      /*WriteVector(f, FDFluxVectorHD.size(), FDFluxVectorHD, "FDTrueVectorHD", FDFluxOriginal.get());
+      WriteVector(f, FDFluxVector.size(), FDFluxVector, "FDTrueVector", FDFluxOriginal.get());
+      WriteVector(f, FDRecoVector.size(), FDRecoVector, "FDRecoVector", FDFluxOriginal.get());
+      WriteVector(f, FDRestoredVectorLowRank.size(), FDRestoredVectorLowRank, "FDRestoredVectorLowRank", FDFluxOriginal.get());
+      WriteVector(f, FDRestoredVectorScaled.size(), FDRestoredVectorScaled, "FDRestoredVectorScaled", FDFluxOriginal.get());
+      WriteVector(f, FDRestoredVectorScaledInv.size(), FDRestoredVectorScaledInv, "FDRestoredVectorScaledInv", FDFluxOriginal.get());
+      WriteVector(f, FDFluxVectorRebinned.size(), FDFluxVectorRebinned, "FDFluxVectorRebinned" );
+      WriteVector(f, FDRecoVectorRebinned.size(), FDRecoVectorRebinned, "FDRecoVectorRebinned" );
+      WriteVector(f, FDRestoredVectorRebinned.size(), FDRestoredVectorRebinned, "FDRestoredVectorRebinned" );*/
+
+      WriteMatrix2D(f, TrueSensingMatrix.cols(), TrueSensingMatrix.rows(), TrueSensingMatrix, "TrueSensingMatrix");  
+      WriteMatrix2D(f, TrueSensingMatrix.cols(), TrueSensingMatrix.rows(), TrueSensingMatrix.inverse(), "TrueSensingMatrixInv");  
+      WriteMatrix2D(f, fittedSensingMatrix.cols(), fittedSensingMatrix.rows(), fittedSensingMatrix, "fittedSensingMatrix");  
+      WriteMatrix2D(f, ScaledUpFittedSensingMatrix.cols(), ScaledUpFittedSensingMatrix.rows(), ScaledUpFittedSensingMatrix, "ScaledUpFittedSensingMatrix");  
+      WriteMatrix2D(f, ScaledUpFittedSensingMatrixInv.cols(), ScaledUpFittedSensingMatrixInv.rows(), ScaledUpFittedSensingMatrixInv, "ScaledUpFittedSensingMatrixInv");  
+
+
+      Eigen::MatrixXd TrueSMrebin = MatrixRebinRows( MatrixRebinCols(TrueSensingMatrix, lessEbins, false), lessEbins, true);
+      WriteMatrix2D(f, TrueSMrebin.cols(), TrueSMrebin.rows(), TrueSMrebin, "TrueSMrebin");  
+
+      FDFluxOriginal->SetName("FDFluxOriginal");
+      FDFluxOriginal->Write();
+    }
+
+    f->Close();
+
+  }
+
   void doMatrixFitAnalysis(int Ebins, int NFluxes, double SenseSmearingLimit, double SSLpb, double NoiseSmearingLimit, bool SmearSensingMatrix, bool SmearRecoFlux, std::string OutputFile) {
     Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
 
@@ -727,29 +868,53 @@ public:
     std::cout << "RebinnedSmearedRecoFluxMatrix.cols() : " << RebinnedSmearedRecoFluxMatrix.cols() << std::endl;
 
     // Fit sensing matrix with TrueFluxMatrix : rebin rows to get Ebins as required 
-    Eigen::MatrixXd fittedSensingMatrix = fitSensingMatrix( MatrixRebinRows(TrueFluxMatrix, Ebins), RebinnedSmearedRecoFluxMatrix, true);
+    // Eigen::MatrixXd fittedSensingMatrix = fitSensingMatrix( MatrixRebinRows(TrueFluxMatrix, Ebins), RebinnedSmearedRecoFluxMatrix, true);
     // This one works well but takes awhile to run
+
+    // Eigen::MatrixXd TrueToyFluxMatrix = LoadToyFluxes(FluxMatrix_Full.rows(), NFluxes);
+    Eigen::MatrixXd TrueToyFluxMatrix = LoadToyFluxes(FluxMatrix_Full.rows(), FluxMatrix_Full.rows());
+    std::cout << "NFluxes : " << NFluxes << std::endl;
+    std::cout << "FluxMatrix_Full.rows() : " << FluxMatrix_Full.rows() << std::endl;
+    Eigen::MatrixXd RecoToyFluxMatrix = TrueSensingMatrix * TrueToyFluxMatrix;
+    Eigen::MatrixXd SmearedRecoToyFluxMatrix = SmearMatrix(RecoToyFluxMatrix, NoiseSmearingLimit);
+    // Eigen::MatrixXd fittedSensingMatrix = fitSensingMatrix(TrueToyFluxMatrix, RecoToyFluxMatrix);
+    Eigen::MatrixXd fittedSensingMatrix = fitSensingMatrix( MatrixRebinRows(TrueToyFluxMatrix, Ebins), MatrixRebinRows(SmearedRecoToyFluxMatrix, Ebins), true);
+
 
     std::cout << " --- Fitted Sensing Matrix --- " << std::endl;
     std::cout << fittedSensingMatrix.format(CleanFmt) << std::endl;
     std::cout << " --- Rebinned True Sensing Matrix --- " << std::endl;
     std::cout << MatrixRebinRows( MatrixRebinCols(TrueSensingMatrix, Ebins, false), Ebins, true).format(CleanFmt) << std::endl;
-    //////////////// Eigen::MatrixXd ScaledUpFittedSensingMatrixInv = scaleUpSensingMatrix(fittedSensingMatrix.inverse(), FluxMatrix_Full.rows());
+    Eigen::MatrixXd ScaledUpFittedSensingMatrix = scaleUpSensingMatrix(fittedSensingMatrix, FluxMatrix_Full.rows());
+    Eigen::MatrixXd ScaledUpFittedSensingMatrixInv = scaleUpSensingMatrix(fittedSensingMatrix.inverse(), FluxMatrix_Full.rows());
 
     TFile *f = CheckOpenFile(OutputFile, "RECREATE");
 
     if ( FDFluxVector.size() ) {
       Eigen::VectorXd FDRecoVector = TrueSensingMatrix*FDFluxVector;
+      Eigen::VectorXd FDRecoVectorRebinned = VectorRebin(FDRecoVector, Ebins, true); 
+      Eigen::VectorXd FDRestoredVectorRebinned = fittedSensingMatrix.inverse() * FDRecoVectorRebinned; 
       std::cout << " Applying low-rank sensing matrix to FD Reco Vector " << std::endl;
-      Eigen::VectorXd FDRestoredVector = applyLowRankSensingMatrix( fittedSensingMatrix.inverse(), FDRecoVector);
-      ///////////////////////////////Eigen::VectorXd FDRestoredVector = ScaledUpFittedSensingMatrixInv*FDRecoVector;
+      Eigen::VectorXd FDRestoredVectorLowRank = applyLowRankSensingMatrix( fittedSensingMatrix.inverse(), FDRecoVector);
+      std::cout << " Applying scaled-up sensing matrix to FD Reco Vector " << std::endl;
+      Eigen::VectorXd FDRestoredVectorScaled = ScaledUpFittedSensingMatrix.inverse()*FDRecoVector;
+      Eigen::VectorXd FDRestoredVectorScaledInv = ScaledUpFittedSensingMatrixInv*FDRecoVector;
 
       WriteVector(f, FDFluxVector.size(), FDFluxVector, "FDTrueVector", FDFluxOriginal.get());
       WriteVector(f, FDRecoVector.size(), FDRecoVector, "FDRecoVector", FDFluxOriginal.get());
-      WriteVector(f, FDRestoredVector.size(), FDRestoredVector, "FDRestoredVector", FDFluxOriginal.get());
+      WriteVector(f, FDRestoredVectorLowRank.size(), FDRestoredVectorLowRank, "FDRestoredVectorLowRank", FDFluxOriginal.get());
+      WriteVector(f, FDRestoredVectorScaled.size(), FDRestoredVectorScaled, "FDRestoredVectorScaled", FDFluxOriginal.get());
+      WriteVector(f, FDRestoredVectorScaledInv.size(), FDRestoredVectorScaledInv, "FDRestoredVectorScaledInv", FDFluxOriginal.get());
+      WriteVector(f, FDFluxVectorRebinned.size(), FDFluxVectorRebinned, "FDFluxVectorRebinned" );
+      WriteVector(f, FDRecoVectorRebinned.size(), FDRecoVectorRebinned, "FDRecoVectorRebinned" );
+      WriteVector(f, FDRestoredVectorRebinned.size(), FDRestoredVectorRebinned, "FDRestoredVectorRebinned" );
 
       WriteMatrix2D(f, TrueSensingMatrix.cols(), TrueSensingMatrix.rows(), TrueSensingMatrix, "TrueSensingMatrix");  
+      WriteMatrix2D(f, TrueSensingMatrix.cols(), TrueSensingMatrix.rows(), TrueSensingMatrix.inverse(), "TrueSensingMatrixInv");  
       WriteMatrix2D(f, fittedSensingMatrix.cols(), fittedSensingMatrix.rows(), fittedSensingMatrix, "fittedSensingMatrix");  
+      WriteMatrix2D(f, ScaledUpFittedSensingMatrix.cols(), ScaledUpFittedSensingMatrix.rows(), ScaledUpFittedSensingMatrix, "ScaledUpFittedSensingMatrix");  
+      WriteMatrix2D(f, ScaledUpFittedSensingMatrixInv.cols(), ScaledUpFittedSensingMatrixInv.rows(), ScaledUpFittedSensingMatrixInv, "ScaledUpFittedSensingMatrixInv");  
+
 
       Eigen::MatrixXd TrueSMrebin = MatrixRebinRows( MatrixRebinCols(TrueSensingMatrix, Ebins, false), Ebins, true);
       WriteMatrix2D(f, TrueSMrebin.cols(), TrueSMrebin.rows(), TrueSMrebin, "TrueSMrebin");  
@@ -786,35 +951,50 @@ public:
       std::cout << "Ebins : " << Ebins << std::endl;
       Eigen::MatrixXd fittedSensingMatrix = SolveSensingMatrix( aSquareTrueFluxMatrix, SquareSmearedRecoFluxMatrix, reg_param, res_norm, soln_norm);
 
-      // Fit sensing matrix with FluxMatrix_Full - all fluxes
-      std::cout << TrueSensingMatrix.cols() << "," << TrueSensingMatrix.rows() << std::endl;
-      std::cout << FluxMatrix_Full.cols() << "," << FluxMatrix_Full.rows() << std::endl;
-      // Eigen::MatrixXd fittedSensingMatrix = fitSensingMatrix(FluxMatrix_Full, (TrueSensingMatrix*FluxMatrix_Full) ); // untested - binning probably wrong
-
       std::cout << " --- Fitted Sensing Matrix --- " << std::endl;
       std::cout << fittedSensingMatrix.format(CleanFmt) << std::endl;
+      // Eigen::MatrixXd ScaledUpFittedSensingMatrixInv = scaleUpSensingMatrix(fittedSensingMatrix.inverse(), Ebins*5);
+      Eigen::MatrixXd ScaledUpFittedSensingMatrix = scaleUpSensingMatrix(fittedSensingMatrix, FluxMatrix_Full.rows());
+      Eigen::MatrixXd ScaledUpFittedSensingMatrixInv = scaleUpSensingMatrix(fittedSensingMatrix.inverse(), FluxMatrix_Full.rows());
+      std::cout << " --- Scaled Up Fitted Sensing Matrix Inverse --- " << std::endl;
+      // std::cout << ScaledUpFittedSensingMatrixInv.format(CleanFmt) << std::endl;
+
       std::cout << " --- Rebinned True Sensing Matrix --- " << std::endl;
       std::cout << MatrixRebinRows( MatrixRebinCols(TrueSensingMatrix, Ebins, false), Ebins, true).format(CleanFmt) << std::endl;
       std::cout << "Frob Norm of (Mat * Etrue) - Ereco : " << FrobeniusNorm((fittedSensingMatrix * aSquareTrueFluxMatrix) - SquareSmearedRecoFluxMatrix) << std::endl;
 
-      Eigen::MatrixXd TrueToyFluxMatrix = LoadToyFluxes(Ebins, Ebins);
+      /*Eigen::MatrixXd TrueToyFluxMatrix = LoadToyFluxes(Ebins, Ebins);
       Eigen::MatrixXd RecoToyFluxMatrix = TrueSensingMatrix * TrueToyFluxMatrix;
       fittedSensingMatrix = SolveSensingMatrix( TrueToyFluxMatrix, RecoToyFluxMatrix, reg_param, res_norm, soln_norm);
       std::cout << " --- Fitted Sensing Matrix --- " << std::endl;
       std::cout << fittedSensingMatrix.format(CleanFmt) << std::endl;
       std::cout << " --- Rebinned True Sensing Matrix --- " << std::endl;
       std::cout << MatrixRebinRows( MatrixRebinCols(TrueSensingMatrix, Ebins, false), Ebins, true).format(CleanFmt) << std::endl;
-      std::cout << "Frob Norm of (Mat * Etrue) - Ereco : " << FrobeniusNorm((fittedSensingMatrix * TrueToyFluxMatrix) - RecoToyFluxMatrix) << std::endl;
+      std::cout << "Frob Norm of (Mat * Etrue) - Ereco : " << FrobeniusNorm((fittedSensingMatrix * TrueToyFluxMatrix) - RecoToyFluxMatrix) << std::endl;*/
 
       TFile *f = CheckOpenFile(OutputFile, "RECREATE");
       if ( FDFluxVector.size() ) {
         Eigen::VectorXd FDRecoVector = TrueSensingMatrix*FDFluxVectorRebinned;
         std::cout << " Applying low-rank sensing matrix to FD Reco Vector " << std::endl;
-        Eigen::VectorXd FDRestoredVector = applyLowRankSensingMatrix( fittedSensingMatrix.inverse(), FDRecoVector);
+        Eigen::VectorXd FDRestoredVectorLowRank = applyLowRankSensingMatrix( fittedSensingMatrix.inverse(), FDRecoVector);
+        std::cout << " Applying scaled-up sensing matrix to FD Reco Vector " << std::endl;
+        std::cout << " ScaledUpFittedSensingMatrix.cols() : " << ScaledUpFittedSensingMatrix.cols() << std::endl;
+        std::cout << " ScaledUpFittedSensingMatrix.rows() : " << ScaledUpFittedSensingMatrix.rows() << std::endl;
+        std::cout << " FDRecoVector.rows() : " << FDRecoVector.rows() << std::endl;
+        Eigen::VectorXd FDRestoredVectorScaled = ScaledUpFittedSensingMatrix.inverse()*FDRecoVector;
+        Eigen::VectorXd FDRestoredVectorScaledInv = ScaledUpFittedSensingMatrixInv*FDRecoVector;
 
         WriteVector(f, FDFluxVector.size(), FDFluxVector, "FDTrueVector", FDFluxOriginal.get());
-        WriteVector(f, FDRecoVector.size(), FDRecoVector, "FDRecoVector" );
-        WriteVector(f, FDRestoredVector.size(), FDRestoredVector, "FDRestoredVector" );
+        WriteVector(f, FDRecoVector.size(), FDRecoVector, "FDRecoVector", FDFluxOriginal.get());
+        WriteVector(f, FDRestoredVectorLowRank.size(), FDRestoredVectorLowRank, "FDRestoredVectorLowRank", FDFluxOriginal.get());
+        WriteVector(f, FDRestoredVectorScaled.size(), FDRestoredVectorScaled, "FDRestoredVectorScaled", FDFluxOriginal.get());
+        WriteVector(f, FDRestoredVectorScaledInv.size(), FDRestoredVectorScaledInv, "FDRestoredVectorScaledInv", FDFluxOriginal.get());
+
+        WriteMatrix2D(f, TrueSensingMatrix.cols(), TrueSensingMatrix.rows(), TrueSensingMatrix, "TrueSensingMatrix");  
+        WriteMatrix2D(f, TrueSensingMatrix.cols(), TrueSensingMatrix.rows(), TrueSensingMatrix.inverse(), "TrueSensingMatrixInv");  
+        WriteMatrix2D(f, fittedSensingMatrix.cols(), fittedSensingMatrix.rows(), fittedSensingMatrix, "fittedSensingMatrix");  
+        WriteMatrix2D(f, ScaledUpFittedSensingMatrix.cols(), ScaledUpFittedSensingMatrix.rows(), ScaledUpFittedSensingMatrix, "ScaledUpFittedSensingMatrix");  
+        WriteMatrix2D(f, ScaledUpFittedSensingMatrixInv.cols(), ScaledUpFittedSensingMatrixInv.rows(), ScaledUpFittedSensingMatrixInv, "ScaledUpFittedSensingMatrixInv");  
 
         FDFluxOriginal->SetName("FDFluxOriginal");
         FDFluxOriginal->Write();
@@ -1030,32 +1210,32 @@ public:
     std::cout << TrueSensingMatrix.cols() << "," << TrueSensingMatrix.rows() << std::endl;
     std::cout << FluxMatrix_Full.cols() << "," << FluxMatrix_Full.rows() << std::endl;
     /*
-    Eigen::MatrixXd TrueToyFluxMatrix = LoadToyFluxes(Ebins, NFluxes);
+    Eigen::MatrixXd TrueToyFluxMatrix = LoadToyFluxes(FluxMatrix_Full.rows(), FluxMatrix_Full.cols());
     Eigen::MatrixXd RecoToyFluxMatrix = TrueSensingMatrix * TrueToyFluxMatrix;
 
-    Eigen::MatrixXd SmearedRecoToyFluxMatrix = SmearMatrix(RecoToyFluxMatrix, SmearingLimit);
+    Eigen::MatrixXd SmearedRecoToyFluxMatrix = SmearMatrix(RecoToyFluxMatrix, NoiseSmearingLimit);
     // Eigen::MatrixXd fittedSensingMatrix = fitSensingMatrix(TrueToyFluxMatrix, RecoToyFluxMatrix);
-    Eigen::MatrixXd fittedSensingMatrix = fitSensingMatrix(TrueToyFluxMatrix, SmearedRecoToyFluxMatrix);
+    Eigen::MatrixXd sqTrueMat = MatrixRebinCols( MatrixRebinRows(TrueToyFluxMatrix, Ebins), Ebins);
+    Eigen::MatrixXd sqRecoMat = MatrixRebinCols( MatrixRebinRows(SmearedRecoToyFluxMatrix, Ebins), Ebins);
+    std::cout << " -------- and ------- "<< std::endl;
+    std::cout << sqTrueMat.format(CleanFmt) << std::endl;
+    std::cout << " -------- and ------- "<< std::endl;
+    std::cout << sqRecoMat.format(CleanFmt) << std::endl;
+    Eigen::MatrixXd fittedSensingMatrix = SolveSensingMatrix( sqTrueMat, sqRecoMat, reg_param, res_norm, soln_norm);
+    // Eigen::MatrixXd fittedSensingMatrix = fitSensingMatrix(TrueToyFluxMatrix, SmearedRecoToyFluxMatrix);
     // Eigen::MatrixXd fittedSensingMatrix = RecoSensingMatrix;
     */
+
     std::cout << " --- Fitted Sensing Matrix --- " << std::endl;
     std::cout << fittedSensingMatrix.format(CleanFmt) << std::endl;
+    Eigen::MatrixXd ScaledUpFittedSensingMatrix = scaleUpSensingMatrix(fittedSensingMatrix, FluxMatrix_Full.rows());
+    Eigen::MatrixXd ScaledUpFittedSensingMatrixInv = scaleUpSensingMatrix(fittedSensingMatrix.inverse(), FluxMatrix_Full.rows());
+    std::cout << " --- Scaled Up Fitted Sensing Matrix Inverse --- " << std::endl;
     std::cout << " --- Rebinned True Sensing Matrix --- " << std::endl;
     std::cout << MatrixRebinRows( MatrixRebinCols(TrueSensingMatrix, Ebins, false), Ebins, true).format(CleanFmt) << std::endl;
     std::cout << "Frob Norm of (Mat * Etrue) - Ereco : " << FrobeniusNorm((fittedSensingMatrix * aSquareTrueFluxMatrix) - SquareSmearedRecoFluxMatrix) << std::endl;
     //////////////// Eigen::MatrixXd ScaledUpFittedSensingMatrixInv = scaleUpSensingMatrix(fittedSensingMatrix.inverse(), FluxMatrix_Full.rows());
-    /*Eigen::MatrixXd ScaledUpFittedSensingMatrix = scaleUpSensingMatrix(fittedSensingMatrix, FluxMatrix_Full.rows());
-    std::cout << " --- Scaled Up Fitted Sensing Matrix --- " << std::endl;
-    std::cout << "ScaledUpFittedSensingMatrix.rows() :" << ScaledUpFittedSensingMatrix.rows() << std::endl;
-    std::cout << "ScaledUpFittedSensingMatrix.cols() :" << ScaledUpFittedSensingMatrix.cols() << std::endl;
-    std::cout << " --- True Sensing Matrix --- " << std::endl;
-    std::cout << "TrueSensingMatrix.rows() :" << TrueSensingMatrix.rows() << std::endl;
-    std::cout << "TrueSensingMatrix.cols() :" << TrueSensingMatrix.cols() << std::endl;*/
-    // std::cout << ScaledUpFittedSensingMatrix.format(CleanFmt) << std::endl;
-
-    // std::cout << " --- True Sensing Matrix --- " << std::endl;
-    // std::cout << TrueSensingMatrix.format(CleanFmt) << std::endl;
-    
+   
     // Compare With Toys
     /*
     Eigen::MatrixXd TrueToyFluxMatrix = LoadToyFluxes(Ebins, NFluxes);
@@ -1075,28 +1255,25 @@ public:
       // std::cout << FDFluxVector << std::endl;
       Eigen::VectorXd FDRecoVector = TrueSensingMatrix*FDFluxVector;
       std::cout << " Applying low-rank sensing matrix to FD Reco Vector " << std::endl;
-      Eigen::VectorXd FDRestoredVector = applyLowRankSensingMatrix( fittedSensingMatrix.inverse(), FDRecoVector);
-      // std::cout << FDRecoVector << std::endl;
-      // Eigen::VectorXd FDRestoredVector = (fittedSensingMatrix.inverse())*VectorRebin(FDRecoVector, Ebins, false); //old - doesnt account for scaledu p size
-      // Eigen::VectorXd FDRestoredVector = (ScaledUpFittedSensingMatrix.inverse())*VectorRebin(FDRecoVector, Ebins, false);
-      // Eigen::MatrixXd SUFSM = (ScaledUpFittedSensingMatrix.inverse());
-      // std::cout << SUFSM.format(CleanFmt) << std::endl;
-      // Eigen::VectorXd FDRestoredVector = (ScaledUpFittedSensingMatrix.inverse())*FDRecoVector;
-      ///////////////////////////////Eigen::VectorXd FDRestoredVector = ScaledUpFittedSensingMatrixInv*FDRecoVector;
-      // std::cout << FDRestoredVector << std::endl;
-
-      /*
-      WriteVector(f, Ebins, FDFluxVector, "FDTrueVector", FDFluxHist.get());
-      WriteVector(f, Ebins, FDRecoVector, "FDRecoVector", FDFluxHist.get());
-      WriteVector(f, Ebins, FDRestoredVector, "FDRestoredVector", FDFluxHist.get());
-      */
+      Eigen::VectorXd FDRestoredVectorLowRank = applyLowRankSensingMatrix( fittedSensingMatrix.inverse(), FDRecoVector);
+      std::cout << " Applying scaled-up sensing matrix to FD Reco Vector " << std::endl;
+      std::cout << " ScaledUpFittedSensingMatrix.cols() : " << ScaledUpFittedSensingMatrix.cols() << std::endl;
+      std::cout << " ScaledUpFittedSensingMatrix.rows() : " << ScaledUpFittedSensingMatrix.rows() << std::endl;
+      std::cout << " FDRecoVector.rows() : " << FDRecoVector.rows() << std::endl;
+      Eigen::VectorXd FDRestoredVectorScaled = ScaledUpFittedSensingMatrix.inverse()*FDRecoVector;
+      Eigen::VectorXd FDRestoredVectorScaledInv = ScaledUpFittedSensingMatrixInv*FDRecoVector;
 
       WriteVector(f, FDFluxVector.size(), FDFluxVector, "FDTrueVector", FDFluxOriginal.get());
       WriteVector(f, FDRecoVector.size(), FDRecoVector, "FDRecoVector", FDFluxOriginal.get());
-      WriteVector(f, FDRestoredVector.size(), FDRestoredVector, "FDRestoredVector", FDFluxOriginal.get());
+      WriteVector(f, FDRestoredVectorLowRank.size(), FDRestoredVectorLowRank, "FDRestoredVectorLowRank", FDFluxOriginal.get());
+      WriteVector(f, FDRestoredVectorScaled.size(), FDRestoredVectorScaled, "FDRestoredVectorScaled", FDFluxOriginal.get());
+      WriteVector(f, FDRestoredVectorScaledInv.size(), FDRestoredVectorScaledInv, "FDRestoredVectorScaledInv", FDFluxOriginal.get());
 
       WriteMatrix2D(f, TrueSensingMatrix.cols(), TrueSensingMatrix.rows(), TrueSensingMatrix, "TrueSensingMatrix");  
+      WriteMatrix2D(f, TrueSensingMatrix.cols(), TrueSensingMatrix.rows(), TrueSensingMatrix.inverse(), "TrueSensingMatrixInv");  
       WriteMatrix2D(f, fittedSensingMatrix.cols(), fittedSensingMatrix.rows(), fittedSensingMatrix, "fittedSensingMatrix");  
+      WriteMatrix2D(f, ScaledUpFittedSensingMatrix.cols(), ScaledUpFittedSensingMatrix.rows(), ScaledUpFittedSensingMatrix, "ScaledUpFittedSensingMatrix");  
+      WriteMatrix2D(f, ScaledUpFittedSensingMatrixInv.cols(), ScaledUpFittedSensingMatrixInv.rows(), ScaledUpFittedSensingMatrixInv, "ScaledUpFittedSensingMatrixInv");  
 
       Eigen::MatrixXd TrueSMrebin = MatrixRebinRows( MatrixRebinCols(TrueSensingMatrix, Ebins, false), Ebins, true);
       WriteMatrix2D(f, TrueSMrebin.cols(), TrueSMrebin.rows(), TrueSMrebin, "TrueSMrebin");  
@@ -1184,28 +1361,34 @@ public:
           TrueSensingMatrix(col_it, col_it) -= limrandom;
         }
       }
-    }/* else if ( fParams.toyM_id == Params::mGauss ) {
+    } else if ( fParams.toyM_id == Params::mGauss ) {
       gRandom->SetSeed(0);
       for (int col_it = 0; col_it < nEbins; col_it++) {
+        TString gstr = TString::Format("TMath::Gaus(x,0.5,%f)", lim/2);
+        TF1* fgaus = new TF1("fgaus", gstr.Data(), 0.0, 1.0);
+	float total = 0;
         // float limit = 0.2;
         float limit = lim;
         TrueSensingMatrix(col_it, col_it) = 1;
-	int aGevBins = nEbins/10 + (nEbins%10 != 0) ;
-        for (int sub_it = col_it+nEbins/10; sub_it >= 0; sub_it--) {
+        total += 1;
+	int aGevBins = (nEbins/10 + (nEbins%10 != 0))/10; // divide by X because want less than a gev..
+        for (int sub_it = col_it+aGevBins; sub_it >= 0; sub_it--) {
           if ( sub_it == col_it || sub_it >= nEbins) {
 	    continue;
 	  }
-          TString gstr = TString::Format("TMath::Gaus(x,0.5,%f)", lim);
-          TF1* fgaus = new TF1("fgaus", gstr.Data(), 0.0, 1.0);
+	  float gausrandom = fgaus->Eval((limit/lim)*0.5);
+	  limit -= gausrandom/50;
+	  if ( limit <= 0 ) {
+	    break;
+          }
+	  TrueSensingMatrix(sub_it, col_it) = gausrandom; 
+	  total += gausrandom;
 	}
+        for (int row_it = 0; row_it < nEbins; row_it++) {
+          TrueSensingMatrix(row_it, col_it) /= total;
+        }
       }
-      for (int row_it = 0; row_it < SmearedMatrix.rows(); row_it++) {
-        for (int col_it = 0; col_it < SmearedMatrix.cols(); col_it++) {
-	  float gausrandom = fgaus->GetRandom();
-	  SmearedMatrix(row_it, col_it) *= gausrandom; 
-	}
-      }
-    }*/
+    }
 
     Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
     std::cout << " --- True Sensing Matrix --- " << std::endl; 
@@ -1219,7 +1402,7 @@ public:
     if (fParams.toyF_id == Params::fRandom) {
       srand( time(NULL) ); // Randomize seed initialization 
       for (int row_it = 0; row_it < nEbins; row_it++) {
-        for (int col_it = 0; col_it < nEbins; col_it++) {
+        for (int col_it = 0; col_it < NFluxes; col_it++) {
 	  float randomf = (float) rand()/RAND_MAX; 
           ToyFluxes(row_it, col_it) = randomf; 
 	}
@@ -1228,7 +1411,10 @@ public:
 
     if (fParams.toyF_id == Params::fRandomLimited) {
       srand( time(NULL) ); // Randomize seed initialization 
-      for (int col_it = 0; col_it < nEbins; col_it++) {
+      for (int col_it = 0; col_it < NFluxes; col_it++) {
+	if (NFluxes!=nEbins) {
+          std::cout << "[ERROR]: Only valid for sq toy flux matrices" << std::endl;
+	}
         float limit = 0.2;
         ToyFluxes(col_it, col_it) = 1;
         for (int sub_it = col_it+1; sub_it >= 0 && sub_it < nEbins; sub_it--) {
@@ -1249,7 +1435,7 @@ public:
 
     Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
     std::cout << " --- True Toy Fluxes --- " << std::endl;
-    std::cout << ToyFluxes.format(CleanFmt) << std::endl; 
+    // std::cout << ToyFluxes.format(CleanFmt) << std::endl; 
 
     // RecoFluxMatrix = TrueSensingMatrix * TrueFluxMatrix;
     // std::cout << " --- Reco Fluxes --- " << std::endl;
@@ -1309,6 +1495,11 @@ public:
 
     int multiplier = newbins/aMat.rows() + (newbins%aMat.rows() != 0);
 
+    Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
+    // std::cout << " --- Matrix 0 --- " << std::endl;
+    // std::cout << aMat.format(CleanFmt) << std::endl;
+
+
     /*for (int row_it = 0; row_it < aMat.rows(); row_it++) {
       for (int col_it = 0; col_it < aMat.cols(); col_it++) {
         for (int new_it = 0; new_it < multiplier; new_it++) {
@@ -1322,7 +1513,213 @@ public:
       }
     }*/
 
-    for (int col_it = 0; col_it < aMat.cols(); col_it++) {
+    // manually average matrix over adjacent rows
+    float midbin = (multiplier/2.0) + 0.5;// 0.5 is "bin" center off-set
+    // std::cout << "midbin : " << midbin << std::endl;
+    if ( std::ceil(midbin) == std::floor(midbin) ) { // midbin center is NOT between bins
+      // std::cout << "midbin center is NOT between bins " << std::endl;
+      for (int row_it = 0; row_it < newMat1.rows(); row_it++) {
+        for (int col_it = 0; col_it < newMat1.cols(); col_it++) {
+	  double val;
+          double Oldrow_it = row_it/multiplier;
+          double Oldcol_it = col_it;
+	  // check position wrt mid-bin
+	  if ( ((row_it)%multiplier)+1 < midbin ) {
+	    // std::cout << "less than - row_it+1 : " << row_it+1 << std::endl;
+	    // check if you can get N-1 bincontents
+	    if ( (row_it)/multiplier != 0) {
+            // if possible, get and take weighted average
+              double rowfrac = std::abs(((row_it%multiplier)-(midbin-1))/(multiplier));
+	      // std::cout << "rowfrac : " << rowfrac << std::endl;
+              val = (aMat(Oldrow_it-1, Oldcol_it) * (rowfrac)) + (aMat(Oldrow_it, Oldcol_it) * (1-rowfrac));
+	    } else {
+              val = aMat(Oldrow_it, Oldcol_it);
+	    }
+	  // check position wrt mid-bin
+	  } else if ( ((row_it+1)%multiplier) == midbin ) {
+	    // std::cout << "equals - row_it+1 : " << row_it+1 << std::endl;
+	    val = aMat(Oldrow_it, Oldcol_it);
+	  // check position wrt mid-bin
+	  } else if ( ((row_it)%multiplier)+1 > midbin ) {
+	    // std::cout << "more than - row_it+1 : " << row_it+1 << std::endl;
+	    // check if you can get N+1 bincontents
+	    if ( (row_it)/multiplier != (aMat.rows()-1) ) {
+            // if possible, get and take weighted average
+              double rowfrac = std::abs(((row_it%multiplier)-(midbin-1))/(multiplier));
+	      // std::cout << "rowfrac : " << rowfrac << std::endl;
+              val = (aMat(Oldrow_it, Oldcol_it) * (1-rowfrac)) + (aMat(Oldrow_it+1, Oldcol_it) * (rowfrac));
+	    } else {
+              val = aMat(Oldrow_it, Oldcol_it);
+	    }
+          }
+	  // std::cout << val << std::endl;
+          newMat1(row_it, col_it) = val/multiplier;
+          // newMat1(row_it, col_it) = val;
+        }
+      }
+
+	  // check position wrt mid-bin
+          // check if you can get +1 OR -1 bin contents (depends on position with respect to mid-bin)
+          // if possible, get and take weighted average
+          // if not possible, take current bin value 
+
+    } else { // midbin center IS between bins
+      std::cout << "midbin center IS between bins " << std::endl;
+
+      for (int row_it = 0; row_it < newMat1.rows(); row_it++) {
+        for (int col_it = 0; col_it < newMat1.cols(); col_it++) {
+          midbin = (multiplier/2.0) + 0.5;// 0.5 is "bin" center off-set
+	  double val;
+          double Oldrow_it = row_it/multiplier;
+          double Oldcol_it = col_it;
+	  // check if close to mid-bin
+	  if ( ( ((row_it+1+0.6) > midbin) && ((row_it+1) < midbin) ) || ( ((row_it+1-0.6) < midbin) && ((row_it+1) > midbin) )  ) {
+	    // std::cout << "equals - row_it+1 : " << row_it+1 << std::endl;
+            val = aMat(Oldrow_it, Oldcol_it);
+	  // check position wrt mid-bin
+	  } else if ( ((row_it)%multiplier)+1 < midbin ) {
+	    // std::cout << "less than - row_it+1 : " << row_it+1 << std::endl;
+	    midbin -= 0.5;
+	    // check if you can get N-1 bincontents
+	    if ( (row_it)/multiplier != 0) {
+            // if possible, get and take weighted average
+              double rowfrac = std::abs(((row_it%multiplier)-(midbin-1))/(multiplier-1));
+	      // std::cout << "rowfrac : " << rowfrac << std::endl;
+              val = (aMat(Oldrow_it-1, Oldcol_it) * (rowfrac)) + (aMat(Oldrow_it, Oldcol_it) * (1-rowfrac));
+	    } else {
+              val = aMat(Oldrow_it, Oldcol_it);
+	    }
+	  // check position wrt mid-bin
+	  } else if ( ((row_it)%multiplier)+1 > midbin ) {
+	    // std::cout << "more than - row_it+1 : " << row_it+1 << std::endl;
+	    midbin += 0.5;
+	    // check if you can get N+1 bincontents
+	    if ( (row_it)/multiplier != (aMat.rows()-1) ) {
+            // if possible, get and take weighted average
+              double rowfrac = std::abs(((row_it%multiplier)-(midbin-1))/(multiplier-1));
+	      // std::cout << "rowfrac : " << rowfrac << std::endl;
+              val = (aMat(Oldrow_it, Oldcol_it) * (1-rowfrac)) + (aMat(Oldrow_it+1, Oldcol_it) * (rowfrac));
+	    } else {
+              val = aMat(Oldrow_it, Oldcol_it);
+	    }
+          }
+	  // std::cout << val << std::endl;
+          newMat1(row_it, col_it) = val/multiplier;
+          // newMat1(row_it, col_it) = val;
+        }
+      }
+    }
+
+    // Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
+    // std::cout << " --- Matrix 1 --- " << std::endl;
+    // std::cout << newMat1.format(CleanFmt) << std::endl;
+
+    // manually average matrix over adjacent columns
+
+    midbin = (multiplier/2.0) + 0.5;// 0.5 is "bin" center off-set
+    std::cout << "midbin : " << midbin << std::endl;
+    if ( std::ceil(midbin) == std::floor(midbin) ) { // midbin center is NOT between bins
+      std::cout << "midbin center is NOT between bins " << std::endl;
+      for (int row_it = 0; row_it < newMat2.rows(); row_it++) {
+        for (int col_it = 0; col_it < newMat2.cols(); col_it++) {
+	  double val;
+          double Oldrow_it = row_it;
+          double Oldcol_it = col_it/multiplier;
+	  // check position wrt mid-bin
+	  if ( ((col_it)%multiplier)+1 < midbin ) {
+	    // std::cout << "less than - col_it+1 : " << col_it+1 << std::endl;
+	    // check if you can get N-1 bincontents
+	    if ( (col_it)/multiplier != 0) {
+            // if possible, get and take weighted average
+              double colfrac = std::abs(((col_it%multiplier)-(midbin-1))/(multiplier));
+	      // std::cout << "colfrac : " << colfrac << std::endl;
+              val = (newMat1(Oldrow_it, Oldcol_it-1) * (colfrac)) + (newMat1(Oldrow_it, Oldcol_it) * (1-colfrac));
+	    } else {
+              val = newMat1(Oldrow_it, Oldcol_it);
+	    }
+	  // check position wrt mid-bin
+	  } else if ( ((col_it+1)%multiplier) == midbin ) {
+	    // std::cout << "equals - col_it+1 : " << col_it+1 << std::endl;
+	    val = newMat1(Oldrow_it, Oldcol_it);
+	  // check position wrt mid-bin
+	  } else if ( ((col_it)%multiplier)+1 > midbin ) {
+	    // std::cout << "more than - col_it+1 : " << col_it+1 << std::endl;
+	    // check if you can get N+1 bincontents
+	    if ( (col_it)/multiplier != (newMat1.cols()-1) ) {
+            // if possible, get and take weighted average
+              double colfrac = std::abs(((col_it%multiplier)-(midbin-1))/(multiplier));
+	      // std::cout << "colfrac : " << colfrac << std::endl;
+              val = (newMat1(Oldrow_it, Oldcol_it) * (1-colfrac)) + (newMat1(Oldrow_it, Oldcol_it+1) * (colfrac));
+	    } else {
+              val = newMat1(Oldrow_it, Oldcol_it);
+	    }
+          }
+	  // std::cout << val << std::endl;
+          // newMat1(row_it, col_it) = val/multiplier;
+          newMat2(row_it, col_it) = val;
+        }
+      }
+
+	  // check position wrt mid-bin
+          // check if you can get +1 OR -1 bin contents (depends on position with respect to mid-bin)
+          // if possible, get and take weighted average
+          // if not possible, take current bin value 
+
+    } else { // midbin center IS between bins
+      std::cout << "midbin center IS between bins " << std::endl;
+
+      for (int row_it = 0; row_it < newMat2.rows(); row_it++) {
+        for (int col_it = 0; col_it < newMat2.cols(); col_it++) {
+          midbin = (multiplier/2.0) + 0.5;// 0.5 is "bin" center off-set
+	  double val;
+          double Oldrow_it = row_it;
+          double Oldcol_it = col_it/multiplier;
+	  // check if close to mid-bin
+	  if ( ( ((col_it+1+0.6) > midbin) && ((col_it+1) < midbin) ) || ( ((col_it+1-0.6) < midbin) && ((col_it+1) > midbin) )  ) {
+	    // std::cout << "equals - col_it+1 : " << col_it+1 << std::endl;
+            val = newMat1(Oldrow_it, Oldcol_it);
+	  // check position wrt mid-bin
+	  } else if ( ((col_it)%multiplier)+1 < midbin ) {
+	    // std::cout << "less than - col_it+1 : " << col_it+1 << std::endl;
+	    midbin -= 0.5;
+	    // check if you can get N-1 bincontents
+	    if ( (col_it)/multiplier != 0) {
+            // if possible, get and take weighted average
+              // double colfrac = (col_it)/(midbin-1);
+              double colfrac = std::abs(((col_it%multiplier)-(midbin-1))/(multiplier-1));
+	      // std::cout << "colfrac : " << colfrac << std::endl;
+              val = (newMat1(Oldrow_it, Oldcol_it-1) * (colfrac)) + (newMat1(Oldrow_it, Oldcol_it) * (1-colfrac));
+	    } else {
+              val = newMat1(Oldrow_it, Oldcol_it);
+	    }
+	  // check position wrt mid-bin
+	  } else if ( ((col_it)%multiplier)+1 > midbin ) {
+	    // std::cout << "more than - col_it+1 : " << col_it+1 << std::endl;
+	    midbin += 0.5;
+	    // check if you can get N+1 bincontents
+	    if ( (col_it)/multiplier != (newMat1.cols()-1) ) {
+            // if possible, get and take weighted average
+              // double colfrac = (col_it)/(midbin-1);
+              double colfrac = std::abs(((col_it%multiplier)-(midbin-1))/(multiplier-1));
+	      // std::cout << "colfrac : " << colfrac << std::endl;
+              val = (newMat1(Oldrow_it, Oldcol_it) * (1-colfrac)) + (newMat1(Oldrow_it, Oldcol_it+1) * (colfrac));
+	    } else {
+              val = newMat1(Oldrow_it, Oldcol_it);
+	    }
+          }
+	  // std::cout << val << std::endl;
+          // newMat2(row_it, col_it) = val/multiplier;
+          newMat2(row_it, col_it) = val;
+        }
+      }
+    }
+
+    // fit matrix 
+    // if ( fitScaleUp ) { 
+    //   do something
+    // }
+
+    /*for (int col_it = 0; col_it < aMat.cols(); col_it++) {
       for (int row_it = 0; row_it < aMat.rows(); row_it++) {
         for (int new_it = 0; new_it < multiplier; new_it++) {
 	  int bi_it = (row_it*multiplier) + new_it;
@@ -1346,7 +1743,7 @@ public:
 	  newMat2(row_it, bi_it) = newMat1(row_it, col_it);
 	}
       }
-    }
+    }*/
 
     return newMat2;
     // return newMat3;
