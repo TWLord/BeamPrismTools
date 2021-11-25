@@ -21,11 +21,15 @@ std::string NomOARange = "";
 
 int NEnuBinMerge = 0;
 
+bool scalebyE = false;
+bool startcsequalreg = true;
+
 int method = 1;
 int weightmethod = 1;
+int coeffmethod = 1;
 size_t nsteps = 20;
 
-double OutOfRangeChi2Factor = 0.1;
+double OutOfRangeChi2Factor = 1.0;
 double NominalRegFactor = 1E-9; 
 double BCRegFactor = 1;
 double CSNorm = -8;
@@ -43,9 +47,11 @@ size_t NominalHist = 4;
 void SayUsage(char const *argv[]) {
   std::cout << "Runlike: " << argv[0]
             << " -N <NDFluxFile,NDFluxHistName> -F <FDFluxFile,FDFluxHistName> "
-	       "[ -W <FDWeightFile> -WM <1:TotalFlux, 2:MaxFlux>		"
-               "-o Output.root -M <1:SVD, 2:QR, 3:Normal, 4:Inverse, 5:COD, 6:ConjugateGradient, 7:LeastSquaresConjugateGradient, 8: BiCGSTAB, 9: BiCGSTAB w/ last sol'n guess> -MX "
-               "<NEnuBinMerge> -OR OutOfRangeChi2Factor -RF BeamConfigsRegFactor "
+	       "[ -W <FDWeightFile> -WM <1:TotalFlux, 2:MaxFlux> -o Output.root "
+               "-M <1:SVD, 2:QR, 3:Normal, 4:Inverse, 5:COD, 6:ConjugateGradient, 7:LeastSquaresConjugateGradient, 8: BiCGSTAB, 9: BiCGSTAB w/ last sol'n guess> "
+               "-CoeffM <1:CNLSolveOnce, 2:CNLSolve, 3:OrthogSolve, 4:OrthogGS, 5:CSSolve > "
+               "-ScaleE <1:true/0:false> -CSeqreg <1:true/0:false> "
+               "-MX <NEnuBinMerge> -OR OutOfRangeChi2Factor -RF BeamConfigsRegFactor "
                "-CML <CoeffMagLowerBound> -CNL <CoefficientNumberLimit> "
 	       "-B <ConfTree,ConfBranches> -Nom <NominalHist(number),NominalCurrent> "
 	       "-FR <FitRangeLow, FitRangeHigh> -CR <CurrentRangeLow,CurrentRangeHigh> "
@@ -206,6 +212,12 @@ void handleOpts(int argc, char const *argv[]) {
       StabilityFactor = str2T<double>(argv[++opt]);
     } else if (std::string(argv[opt]) == "-CSnorm") {
       CSNorm = str2T<double>(argv[++opt]);
+    } else if (std::string(argv[opt]) == "-CoeffM") {
+      coeffmethod = str2T<int>(argv[++opt]);
+    } else if (std::string(argv[opt]) == "-ScaleE") {
+      scalebyE = str2T<bool>(argv[++opt]);
+    } else if (std::string(argv[opt]) == "-CSeqreg") {
+      startcsequalreg = str2T<bool>(argv[++opt]);
     } else if ((std::string(argv[opt]) == "-?") ||
                (std::string(argv[opt]) == "--help")) {
       SayUsage(argv);
@@ -246,7 +258,8 @@ int main(int argc, char const *argv[]) {
   //     pre-conditioning
 
   // Out of fit range behavior
-  p.OORMode = FluxLinearSolver::Params::kGaussianDecay; // To left/right of last
+  // p.OORMode = FluxLinearSolver::Params::kGaussianDecay; // To left/right of last
+  p.OORMode = FluxLinearSolver::Params::kWeightOnly; // Only uses OORF weightin for ranges, no appended gaussians 
   //     'fit'
   // bin decay gaussianly
   // p.OORMode =
@@ -268,7 +281,7 @@ int main(int argc, char const *argv[]) {
   p.NominalFlux = {NominalHist, NominalCurrent};
 
   // Chi2 factor out of fit range
-  p.OORFactor = OutOfRangeChi2Factor;
+  p.OORFactor = pow(OutOfRangeChi2Factor, 0.5);
   p.coeffMagLower = coeffMagLimit;
   p.LeastNCoeffs = leastNCoeffs;
   p.FitBetweenFoundPeaks = false;
@@ -287,22 +300,23 @@ int main(int argc, char const *argv[]) {
   p.WFile = WFile;
   p.WeightMethod = FluxLinearSolver::Params::Weighting(weightmethod);
   //p.OffAxisRangesDescriptor = "-1.45_32.45:0.1,37.45_37.55:0.1";
- 
+
+  // p.startCSequalreg = true;
+  // p.OrthogSolve = true;
+
+  // Weights fluxes by E for solving
+  p.ScaleByE = scalebyE;
   // For CSSolve, sets starting reg factor for iterative CS solver equal to nominal reg factor 
-  p.startCSequalreg = true;
-  p.OrthogSolve = true;
+  p.startCSequalreg = startcsequalreg;
+  // p.InvCovWeighting = 0.8;
+
+  p.CoeffMethod = FluxLinearSolver::Params::CoeffReducer(coeffmethod);
+ 
 
   int ncoeffs = 0;
-  bool CSSolve = false;
-  bool CNLSolve = true;
-  bool CNLSolveOnce = false;
   if (nsteps == 1) {
-    CNLSolveOnce = true;
+    p.CoeffMethod = FluxLinearSolver::Params::kCNLSolveOnce;
   }
-  if (CNLSolve || CNLSolveOnce) {
-    p.OrthogSolve = false;
-  }
-  bool OrthogGS = false;
 
   fls.Initialize(p, ncoeffs, {NDFile, NDHists}, {FDFile, FDHist}, {BCTree, BCBranches}, true);
 
@@ -318,7 +332,8 @@ int main(int argc, char const *argv[]) {
   // double start = -18;
   
 
-  if (OrthogGS) {
+  if (p.CoeffMethod == FluxLinearSolver::Params::kOrthogGS) {
+    std::cout << " ---- DOING OrthogGS SOLVE ----" << std::endl;
     std::string GSFile = OutputFile.substr(0, OutputFile.size()-5)+"_ortho.root";
     TFile *orthof = CheckOpenFile(GSFile, "RECREATE");
     // fls.WriteOrthogs(f);
@@ -326,10 +341,13 @@ int main(int argc, char const *argv[]) {
     orthof->Write();
   }
 
-  if (p.OrthogSolve) {
+  // if (p.OrthogSolve) {
+  if (p.CoeffMethod == FluxLinearSolver::Params::kOrthog) {
+    std::cout << " ---- DOING Orthog SOLVE ----" << std::endl;
     double soln_norm, res_norm;
     // double reg_exp = BCRegFactor;
-    double reg_exp = -9;
+    double reg_exp = NominalRegFactor;
+    // double reg_exp = -9;
     // write function that runs solve for nominal input fluxes,
     // sorts based on QR orthog projection, then re-calls solve.. 
     // but can also solve for nominal + additional fluxes.. 
@@ -344,7 +362,8 @@ int main(int argc, char const *argv[]) {
     // fls.WriteOrthogSolve(OutputFile, res_norm, soln_norm);
   }
 
-  if (CSSolve) {
+  if (p.CoeffMethod == FluxLinearSolver::Params::kCSSolve) {
+    std::cout << " ---- DOING CS SOLVE ----" << std::endl;
 
     // looking at coeff removal below coefflim size
     double coefflim = 1E-9;
@@ -357,7 +376,8 @@ int main(int argc, char const *argv[]) {
 
     TGraph lcurve(nsteps);
     // double reg_exp = -9;
-    double reg_exp = BCRegFactor;
+    // double reg_exp = BCRegFactor;
+    double reg_exp = NominalRegFactor;
     std::vector<double> omega;
     double soln_norm, res_norm;
 
@@ -439,7 +459,8 @@ int main(int argc, char const *argv[]) {
     // kcurve.Write("kcurve");
     f->Write();
 
-  } else if (CNLSolveOnce) {
+  } else if (p.CoeffMethod == FluxLinearSolver::Params::kCNLSolveOnce) {
+    std::cout << " ---- DOING CNL SOLVE ONCE ----" << std::endl;
     double soln_norm=0, res_norm=0;
     // double input_reg = pow(10,-9);
     double input_reg = NominalRegFactor; 
@@ -449,7 +470,8 @@ int main(int argc, char const *argv[]) {
     fls.Write(f, res_norm, soln_norm);
     f->Write();
 
-  } else if (CNLSolve) {
+  } else if (p.CoeffMethod == FluxLinearSolver::Params::kCNLSolve) {
+    std::cout << " ---- DOING CNL SOLVE ----" << std::endl;
 
     double start = -10;
     double end = -7;

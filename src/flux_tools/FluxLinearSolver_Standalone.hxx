@@ -403,9 +403,9 @@ public:
 
     /// If using a FitBetween mode:
     /// 0: Ignore all bins outside range
-    /// 1: Try to force bins to 0
+    /// 1: Try to force bins to 0 // Not implemented
     /// 2: Gaussian decay from target flux at closest kept bin.
-    enum OutOfRangeModeEnum { kIgnore = 0, kZero, kGaussianDecay };
+    enum OutOfRangeModeEnum { kIgnore = 0, kZero, kGaussianDecay, kWeightOnly };
 
     /// How to deal with out of range
     OutOfRangeModeEnum OORMode;
@@ -458,7 +458,15 @@ public:
 
     bool startCSequalreg;
 
-    bool OrthogSolve;
+    // bool OrthogSolve;
+
+    bool ScaleByE;
+
+    double InvCovWeighting;
+
+    enum CoeffReducer { kCNLSolveOnce = 1, kCNLSolve, kOrthog, kOrthogGS, kCSSolve };
+
+    CoeffReducer CoeffMethod;
 
   };
   Params fParams;
@@ -485,7 +493,10 @@ public:
     p.WFile = "";
     p.WeightMethod = Params::TotalFlux;
     p.startCSequalreg = false;
-    p.OrthogSolve = false;
+    // p.OrthogSolve = false;
+    p.ScaleByE = false;
+    p.InvCovWeighting = 1.0;
+    p.CoeffMethod = Params::kCNLSolveOnce;
 
     return p;
   }
@@ -496,6 +507,9 @@ public:
   Eigen::MatrixXd FluxMatrix_Solve;
   Eigen::MatrixXd FluxMatrix_Reduced;
   Eigen::VectorXd Target;
+
+  Eigen::MatrixXd InvCovMatrix;
+  Eigen::VectorXd Ebins;
 
   Eigen::MatrixXd FDWeights;
 
@@ -672,6 +686,11 @@ public:
 	tmpv.emplace_back(Flux3D->GetZaxis()->GetBinCenter(zbi_it)); 
       }
       zCenter.emplace_back(tmpv);
+
+      Ebins = Eigen::VectorXd::Zero(Flux3D->GetXaxis()->GetNbins());
+      for (size_t xbi_it = 0; xbi_it < Flux3D->GetXaxis()->GetNbins(); xbi_it++) {
+        Ebins(xbi_it) = Flux3D->GetXaxis()->GetBinCenter(xbi_it + 1);
+      }
       
 /*
       int lowCurrentBin;
@@ -827,6 +846,16 @@ public:
         OAbinsperhist[v1] += AllOAbins[v1][v2];
       }
     }
+
+    if (fParams.ScaleByE) {
+      std::cout << "Scaling ND fluxes by E" << std::endl;
+      for (size_t m_it = 0; m_it < NDMatrices.size(); m_it++) {
+        for (size_t e_it = 0; e_it < Ebins.size(); e_it++) {
+          NDMatrices[m_it].row(e_it).array() *= Ebins(e_it);
+        }
+      }
+    }
+
     // std::cout << "FullMcols : " << FullMcols << std::endl;
     // std::cout << "NDMatrices.size(): " << NDMatrices.size() << std::endl;
 
@@ -1055,6 +1084,8 @@ public:
                 exp(-fParams.ExpDecayRate * (enu_first_counted_bin - enu) *
                     (enu_first_counted_bin - enu) /
                     (sigma5_range * sigma5_range));
+          } else if (fParams.OORMode == Params::kWeightOnly) {
+            oor_target = FDFlux_osc->GetBinContent(bi_it);
           }
 
           Target(t_it++) = oor_target * fParams.OORFactor;
@@ -1085,11 +1116,32 @@ public:
                 exp(-fParams.ExpDecayRate * (enu - enu_last_counted_bin) *
                     (enu - enu_last_counted_bin) /
                     (sigma5_range * sigma5_range));
+          } else if (fParams.OORMode == Params::kWeightOnly) {
+            oor_target = FDFlux_osc->GetBinContent(bi_it);
           }
+
           Target(t_it++) = oor_target * fParams.OORFactor;
         }
       }
     }
+
+    if (fParams.ScaleByE) {
+      std::cout << "Scaling Target by E" << std::endl;
+      // Target = (Ebins.transpose() * Target).eval();
+      for (size_t e_it = 0; e_it < Ebins.size(); e_it++) {
+        Target[e_it] *= Ebins(e_it);
+      }
+    }
+
+    if (fParams.InvCovWeighting) {
+      InvCovMatrix = Eigen::MatrixXd::Identity(Ebins.size(), Ebins.size()); 
+      for (size_t e_it = 0; e_it < Ebins.size(); e_it++) {
+        if ( ( e_it >= (FitBinLow - 1) ) && ( e_it <= (FitBinHigh - 1) ) ) {
+          InvCovMatrix(e_it, e_it) *= fParams.OORFactor;
+        }
+      }
+    }
+
   }
 
   Eigen::VectorXd const &Solve(double reg_param, double BC_param, double &res_norm,
@@ -1161,10 +1213,17 @@ public:
        FluxMatrix_Solve.bottomRows(NFluxes) = (FluxMatrix_Solve.bottomRows(NFluxes) * FDWeights).eval();
        FluxMatrix_Reduced = FluxMatrix_Solve;
      }
-     else if ( ! fParams.OrthogSolve ) {
+     // else if ( ! fParams.OrthogSolve ) {
+     // else if ( fParams.CoeffMethod != Params::kOrthog ) {
+     else {
        FluxMatrix_Reduced = FluxMatrix_Solve;
      }
    }
+
+   /*if (fParams.InvCovWeighting) {
+     FluxMatrix_Reduced = (InvCovMatrix * FluxMatrix_Reduced).eval();
+   }*/
+
     Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
     // std::cout << FDWeights.inverse().format(CleanFmt) << std::endl;
 
@@ -1322,12 +1381,6 @@ public:
       break;
     }
     case Params::kConjugateGradient: {
-      // SparseMatrix<double> = FluxMatrix_Reduced; // setting to sparsematrix - may not work - probably not optimal for runtimes
-      // BiCGSTAB<SparseMatrix<double> > solver; // template
-      //BiCGSTAB<Eigen::MatrixXd> solver; // 
-      // ConjugateGradient<Eigen::MatrixXd>, Lower|Upper solver;
-      // Eigen::ConjugateGradient<Eigen::MatrixXd, Lower|Upper> solver;
-      
       Eigen::ConjugateGradient<Eigen::MatrixXd, Eigen::Lower|Eigen::Upper> solver;
       std::cout << "ConjugateGradient solve" << std::endl;
       if (use_reg) {
@@ -1341,12 +1394,6 @@ public:
 	std::cout << "#iterations:     " << solver.iterations() << std::endl;
 	std::cout << "estimated error: " << solver.error()      << std::endl; 
 
-        /*((FluxMatrix_Reduced.topRows(NBins).transpose() *
-          FluxMatrix_Reduced.topRows(NBins)) +
-	  FluxMatrix_Reduced.bottomRows(NFluxes).transpose() *
-          FluxMatrix_Reduced.bottomRows(NFluxes)) * last_solution =
-                        FluxMatrix_Reduced.topRows(NBins).transpose() *
-                        Target.topRows(NBins);*/
       } else {
 	solver.compute(FluxMatrix_Reduced.topRows(NBins).transpose() *
 		 	FluxMatrix_Reduced.topRows(NBins));
@@ -1356,11 +1403,6 @@ public:
 	std::cout << "#iterations:     " << solver.iterations() << std::endl;
 	std::cout << "estimated error: " << solver.error()      << std::endl; 
 
-	/*(FluxMatrix_Reduced.topRows(NBins).transpose() *
-        (FluxMatrix_Reduced.topRows(NBins).transpose() *
-	 FluxMatrix_Reduced.topRows(NBins)) * last_solution = 
-                        FluxMatrix_Reduced.topRows(NBins).transpose() *
-                        Target.topRows(NBins);*/
       }
       break;
     }
@@ -2161,6 +2203,13 @@ public:
     size_t NFluxes = FluxMatrix_Solve.cols();
     size_t NEqs = FluxMatrix_Solve.rows();
     // size_t NBins = NEqs - NFluxes;
+    //
+    if (fParams.ScaleByE) {
+      for (size_t it = 0; it < Ebins.size(); it++) {
+        Target(it) /= Ebins(it);
+        FluxMatrix_Full.row(it) /= Ebins(it);
+      }
+    }
 
     TH1 *FDFlux_osc_wr = static_cast<TH1 *>(FDFlux_osc->Clone("FDFlux_osc"));
     TH1 *FDFlux_targ_OORScale =

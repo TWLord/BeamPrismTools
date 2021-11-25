@@ -11,6 +11,7 @@
 
 #include "TFile.h"
 #include "TGraph.h"
+#include "TGraph2D.h"
 #include "TH1.h"
 #include "TH2.h"
 #include "TH3.h"
@@ -66,6 +67,22 @@ double second_deriv(double *evals, double step) {
   return deriv(&first_deriv_evals[2], step);
 }
 
+TGraph2D *MatrixToTGraph(Eigen::MatrixXd aMat) {
+  TGraph2D * graph1 = new TGraph2D(aMat.rows()*aMat.cols());
+  int counter = 0;
+  double stepx = 1.0/aMat.cols();
+  double stepy = 1.0/aMat.rows();
+  // offset = 1/2 stepx
+  for (int row_it = 0; row_it < aMat.rows(); row_it++) {
+    for (int col_it = 0; col_it < aMat.cols(); col_it++) {
+      // graph1->SetPoint( counter, col_it*11/aMat.cols(), row_it*11/aMat.rows(), aMat(row_it, col_it) );
+      // graph1->SetPoint( counter, float(col_it)*10/aMat.cols(), float(row_it)*10/aMat.rows(), aMat(row_it, col_it) );
+      graph1->SetPoint( counter, (col_it+0.5)*stepx, (row_it+0.5)*stepy, aMat(row_it, col_it) );
+      counter++;
+    }
+  }
+  return graph1;
+}
 
 class TheFitFunction { 
 
@@ -110,7 +127,7 @@ class ERecoSolver {
 public:
   struct Params {
     enum Solver { kSVD = 1, kQR, kNormal, kInverse, kCOD, kConjugateGradient, kLeastSquaresConjugateGradient, kBiCGSTAB, kBiCGSTABguess };
-    enum ToyMatrixType { mRandom, mRandomLimited, mGauss }; 
+    enum ToyMatrixType { mRandom, mRandomLimited, mGauss, mEGauss }; 
     enum ToyFluxType { fRandom, fRandomLimited, fGauss }; 
     enum SmearType { sRandom, sRandomLimited, sGauss }; 
     enum ComputeType { cMatrixMap }; 
@@ -742,13 +759,19 @@ public:
     Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
     std::cout << "Running lower dimension fit test with toy fluxes" << std::endl;
 
+    int inputEbins = Ebins;
+    if (Ebins != 400/(400/Ebins)) {
+      std::cout << "Changed binning for Ebins from " << Ebins << " to " <<  400/(400/Ebins) << std::endl;
+      Ebins = 400/(400/Ebins);
+    }
+
     // Initialising here with Ebins as higher dim binning, lessEbins lower dim binning
     LoadToySensingMatrix(Ebins, SenseSmearingLimit, SSLpb);
 
     RecoFluxMatrix = TrueSensingMatrix * TrueFluxMatrix; 
 
     // Eigen::MatrixXd TrueToyFluxMatrix = LoadToyFluxes(Ebins, Ebins*2); 
-    Eigen::MatrixXd TrueToyFluxMatrix = LoadToyFluxes(Ebins, Ebins*8); 
+    Eigen::MatrixXd TrueToyFluxMatrix = LoadToyFluxes(Ebins, Ebins); 
     Eigen::MatrixXd RecoToyFluxMatrix = TrueSensingMatrix * TrueToyFluxMatrix; 
 
     Eigen::MatrixXd ldTrueToyFluxMatrix = MatrixRebinRows(TrueToyFluxMatrix, lessEbins);
@@ -773,21 +796,37 @@ public:
     // std::cout << ROOTRebin.format(CleanFmt) << std::endl;
 
     ComputeMatrix(MatrixRebinCols(ldTrueToyFluxMatrix, lessEbins), MatrixRebinCols(ldRecoToyFluxMatrix, lessEbins));
-    Eigen::MatrixXd fittedSensingMatrix = fitSensingMatrix( ldTrueToyFluxMatrix, ldRecoToyFluxMatrix, true);
+    Eigen::MatrixXd fittedSensingMatrix = RecoSensingMatrix;
+    // Eigen::MatrixXd fittedSensingMatrix = fitSensingMatrix( ldTrueToyFluxMatrix, ldRecoToyFluxMatrix, true);
+
+    TGraph2D *fittedSensingGraph = MatrixToTGraph(fittedSensingMatrix);
+    fittedSensingGraph->SetName("fittedSensingGraph");
 
     /*std::cout << " --- Fitted Sensing Matrix --- " << std::endl;
     std::cout << fittedSensingMatrix.format(CleanFmt) << std::endl;
     std::cout << " --- Rebinned True Sensing Matrix --- " << std::endl;
     std::cout << MatrixRebinRows( MatrixRebinCols(TrueSensingMatrix, Ebins, false), Ebins, true).format(CleanFmt) << std::endl;*/
+
     Eigen::MatrixXd ScaledUpFittedSensingMatrix = scaleUpSensingMatrix(fittedSensingMatrix, Ebins); 
+    // Eigen::MatrixXd ScaledUpFittedSensingMatrix = scaleUpSensingMatrix(fittedSensingMatrix, largerEbins); 
+    // std::cout << "Scaled up one" << std::endl;
     Eigen::MatrixXd ScaledUpFittedSensingMatrixInv = scaleUpSensingMatrix(fittedSensingMatrix.inverse(), Ebins); 
+    // Eigen::MatrixXd ScaledUpFittedSensingMatrixInv = scaleUpSensingMatrix(fittedSensingMatrix.inverse(), largerEbins); 
+    // std::cout << "Scaled up two" << std::endl;
+    Eigen::MatrixXd InterpolatedMat = BiLinearInterpolate(fittedSensingGraph, Ebins);
+    Eigen::MatrixXd InterpolatedMatInv = InterpolatedMat.inverse();
+    // may need to re-normalise along cols after this
+
+    // std::cout << "ScaledUpFittedSensingMatrix.rows() : " << ScaledUpFittedSensingMatrix.rows() << std::endl;
+    // std::cout << "ScaledUpFittedSensingMatrix.cols() : " << ScaledUpFittedSensingMatrix.cols() << std::endl;
 
     TFile *f = CheckOpenFile(OutputFile, "RECREATE");
 
     if ( FDFluxVector.size() ) {
       // Fixing naming conventions
       Eigen::VectorXd FDFluxVectorHD = FDFluxVector;
-      FDFluxVector = FDFluxVectorRebinned;
+      FDFluxVector = VectorRebin(FDFluxVectorHD, Ebins, true);
+      // FDFluxVector = FDFluxVectorRebinned;
       Eigen::VectorXd FDFluxVectorRebinned = VectorRebin(FDFluxVector, lessEbins, true); 
       // Getting Recos
       Eigen::VectorXd FDRecoVector = TrueSensingMatrix*FDFluxVector;
@@ -798,6 +837,8 @@ public:
       std::cout << " Applying scaled-up sensing matrix to FD Reco Vector " << std::endl;
       Eigen::VectorXd FDRestoredVectorScaled = ScaledUpFittedSensingMatrix.inverse()*FDRecoVector;
       Eigen::VectorXd FDRestoredVectorScaledInv = ScaledUpFittedSensingMatrixInv*FDRecoVector;
+
+      Eigen::VectorXd FDRestoredVectorBiLinear = InterpolatedMat.inverse()*FDRecoVector;
 
       WriteVector(f, FDFluxVectorHD.size(), FDFluxVectorHD, "FDTrueVectorHD"); 
       WriteVector(f, FDFluxVector.size(), FDFluxVector, "FDTrueVector");
@@ -824,6 +865,8 @@ public:
       WriteMatrix2D(f, fittedSensingMatrix.cols(), fittedSensingMatrix.rows(), fittedSensingMatrix, "fittedSensingMatrix");  
       WriteMatrix2D(f, ScaledUpFittedSensingMatrix.cols(), ScaledUpFittedSensingMatrix.rows(), ScaledUpFittedSensingMatrix, "ScaledUpFittedSensingMatrix");  
       WriteMatrix2D(f, ScaledUpFittedSensingMatrixInv.cols(), ScaledUpFittedSensingMatrixInv.rows(), ScaledUpFittedSensingMatrixInv, "ScaledUpFittedSensingMatrixInv");  
+      WriteMatrix2D(f, InterpolatedMat.cols(), InterpolatedMat.rows(), InterpolatedMat, "InterpolatedMat");  
+      WriteMatrix2D(f, InterpolatedMatInv.cols(), InterpolatedMatInv.rows(), InterpolatedMatInv, "InterpolatedMatInv");  
 
 
       Eigen::MatrixXd TrueSMrebin = MatrixRebinRows( MatrixRebinCols(TrueSensingMatrix, lessEbins, false), lessEbins, true);
@@ -831,6 +874,8 @@ public:
 
       FDFluxOriginal->SetName("FDFluxOriginal");
       FDFluxOriginal->Write();
+
+      fittedSensingGraph->Write();
     }
 
     f->Close();
@@ -1388,6 +1433,30 @@ public:
           TrueSensingMatrix(row_it, col_it) /= total;
         }
       }
+    } else if ( fParams.toyM_id == Params::mEGauss ) {
+      TH1* tmph = FDFluxOriginal->Rebin(FDFluxOriginal->GetNbinsX()/nEbins);
+      tmph->Scale(1.0/nEbins);
+      for (int col_it = 0; col_it < nEbins; col_it++) {
+        // double Energy = tmph->GetBinCenter(col_it+1)*1000; // energy resolution defined in MeV
+        double Energy = tmph->GetBinCenter(col_it+1); // energy resolution defined in MeV
+        // std::cout << Energy << std::endl; 
+        double sigma = Energy*0.15/sqrt(Energy);
+        TString gstr = TString::Format("TMath::Gaus(x,%f,%f)", Energy, sigma);
+        // TF1* fgaus = new TF1("fgaus", gstr.Data(), 0.0, 10000.0);
+        TF1* fgaus = new TF1("fgaus", gstr.Data(), 0.0, 10.0);
+	float total = 0;
+        for (int row_it = 0; row_it < nEbins; row_it++) {
+          // float fg = fgaus->Eval(tmph->GetBinCenter(row_it+1)*1000);
+          float fg = fgaus->Eval(tmph->GetBinCenter(row_it+1));
+          // std::cout << "fg : " << fg << std::endl;
+	  TrueSensingMatrix(row_it, col_it) = fg; 
+          total += fg;
+        }
+	// std::cout << "Normalising row /= " << total << std::endl;
+        for (int row_it = 0; row_it < nEbins; row_it++) {
+          TrueSensingMatrix(row_it, col_it) /= total;
+        }
+      }
     }
 
     Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
@@ -1470,11 +1539,28 @@ public:
       for (int it = 0; it < RecoVec.size(); it++) {
         double newbin = 0;
         for (int sub_it = 0; sub_it < RecoVec.size(); sub_it++) {
+          // catch it/multiplier and sub_it/multiplier >= aMat.rows()/cols() here
+          // uses previous SM value if last one unavailable
+          int roundit = it/multiplier; 
+          if (it/multiplier >= aMat.rows()) {
+            roundit = aMat.cols() - 1;
+	    // std::cout << "roundit : " << roundit << std::endl;
+          }
+          int roundsubit = (sub_it/multiplier);
+          if (sub_it/multiplier >= aMat.rows()) {
+            roundsubit = aMat.cols() - 1; 
+	    // std::cout << "roundsubit : " << roundsubit << std::endl;
+	    // std::cout << "sub_it/multiplier : " << sub_it/multiplier << std::endl;
+          }
+
 	  if (sub_it/multiplier != it/multiplier) {
-            newbin += RecoVec(sub_it)*aMat(it/multiplier, sub_it/multiplier)/multiplier;
+	    // std::cout << "using roundit : " << roundit << std::endl;
+	    // std::cout << "    and using using roundsubit : " << roundsubit << std::endl;
+            newbin += RecoVec(sub_it)*aMat(roundit, roundsubit)/multiplier;
 	  }
 	  if (sub_it/multiplier == it/multiplier) {
-            newbin += RecoVec(it)*aMat(it/multiplier, it/multiplier)/multiplier;
+	    // std::cout << "using roundit only : " << roundit << std::endl;
+            newbin += RecoVec(it)*aMat(roundit, roundit)/multiplier;
 	  }
         }
         RestoredVec(it) = newbin; 
@@ -1484,6 +1570,25 @@ public:
       
     // }
     return RestoredVec;
+  }
+
+  Eigen::MatrixXd BiLinearInterpolate(TGraph2D * thegraph, int newbins) {
+    Eigen::MatrixXd newMat(newbins, newbins);
+    for (int row_it = 0; row_it < newMat.rows(); row_it++) {
+      for (int col_it = 0; col_it < newMat.cols(); col_it++) {
+        // double newx = 10*float(row_it)/newbins;
+        // double newy = 10*float(col_it)/newbins;
+        double newx = float(row_it)/newbins;
+        double newy = float(col_it)/newbins;
+        // + offset?
+        if (!newx && !newy) {
+          continue;
+        }
+        std::cout << "newx,newy : " << newx << "," << newy << std::endl;
+        newMat(col_it, row_it) = thegraph->Interpolate(newx, newy);
+      }
+    }
+    return newMat;
   }
 
   Eigen::MatrixXd scaleUpSensingMatrix(Eigen::MatrixXd aMat, int newbins) {

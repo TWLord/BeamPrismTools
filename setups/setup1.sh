@@ -29,8 +29,9 @@ if [ -z "${G4LBNE_IS_SETUP}" ]; then
     echo experiment is $GROUP
 
      
-    export LBNE_PRODUCT_DIR=/cvmfs/fermilab.opensciencegrid.org/products/larsoft/
-    source /cvmfs/fermilab.opensciencegrid.org/products/larsoft/setup
+    #export LBNE_PRODUCT_DIR=/cvmfs/fermilab.opensciencegrid.org/products/larsoft/
+    #source /cvmfs/fermilab.opensciencegrid.org/products/larsoft/setup
+    . /cvmfs/dune.opensciencegrid.org/products/dune/setup_dune.sh
     setup cmake v3_3_2
 #g4 v4_10_3_p03b clhep depend same as root version setup by dk2nu
     setup geant4 v4_10_3_p03b -q e15:prof
